@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 import {
   FolderOpen,
@@ -25,10 +26,16 @@ export function Sidebar() {
     <aside className="w-14 bg-[var(--bg-secondary)] border-r border-[var(--border)] flex flex-col items-center py-4 gap-2">
       <Link
         href="/workspace"
-        className="w-8 h-8 rounded-lg bg-[var(--accent)] flex items-center justify-center text-white font-bold text-sm mb-4"
+        className="w-9 h-9 rounded-lg flex items-center justify-center mb-4 hover:opacity-80 transition-opacity"
         title="Open Canvas"
       >
-        OC
+        <Image
+          src="/open_canvas_logo.png"
+          alt="Open Canvas"
+          width={32}
+          height={32}
+          className="rounded"
+        />
       </Link>
       {NAV_ITEMS.map((item) => {
         const isActive =

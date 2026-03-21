@@ -1,6 +1,8 @@
-# Open Canvas
+<p align="center">
+  <img src="assets/open_canvas_logo.png" alt="Open Canvas" width="400" />
+</p>
 
-**Build apps from your data using the coding agents you already have set up.**
+<p align="center"><strong>Build apps from your data using the coding agents you already have set up.</strong></p>
 
 Open Canvas is a local browser-based IDE that connects to your existing Claude Code, Codex, and Gemini accounts — no new API keys required. It wraps your terminal coding agents in a clean UI so you can focus on building instead of managing terminal sessions.
 

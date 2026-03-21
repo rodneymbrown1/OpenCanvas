@@ -6,6 +6,7 @@ import { AgentTerminal } from "@/components/Terminal";
 import { AgentSelector, useActiveAgent } from "@/components/AgentSelector";
 import { FilePreviewModal } from "@/components/FilePreviewModal";
 import { ConnectAgentModal } from "@/components/ConnectAgentModal";
+import Image from "next/image";
 import {
   PanelLeftClose,
   PanelLeftOpen,
@@ -219,10 +220,15 @@ export default function WorkspacePage() {
               />
             ) : (
               <div className="flex items-center justify-center h-full">
-                <div className="text-center space-y-4 max-w-sm">
-                  <div className="w-16 h-16 rounded-2xl bg-[var(--accent)]/10 border border-[var(--accent)]/20 flex items-center justify-center text-[var(--accent)] text-2xl font-bold mx-auto">
-                    OC
-                  </div>
+                <div className="text-center space-y-6 max-w-sm">
+                  <Image
+                    src="/open_canvas_logo.png"
+                    alt="Open Canvas"
+                    width={200}
+                    height={60}
+                    className="mx-auto opacity-80"
+                    priority
+                  />
                   <p className="text-sm text-[var(--text-muted)]">
                     Your app preview will appear here. Connect an agent and
                     start building.
