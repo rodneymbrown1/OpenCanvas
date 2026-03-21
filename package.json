@@ -1,0 +1,53 @@
+{
+  "name": "open-canvas",
+  "version": "1.0.0",
+  "description": "Browser-based IDE for terminal coding agents",
+  "main": "index.js",
+  "scripts": {
+    "dev": "next dev --port 3000",
+    "build": "next build",
+    "start": "next start",
+    "pty-server": "node server/pty-server.mjs",
+    "open-canvas": "concurrently \"npm run dev\" \"npm run pty-server\""
+  },
+  "bin": {
+    "oc": "./cli/bin/oc.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rodneymbrown1/OpenCanvas.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/rodneymbrown1/OpenCanvas/issues"
+  },
+  "homepage": "https://github.com/rodneymbrown1/OpenCanvas#readme",
+  "dependencies": {
+    "@homebridge/node-pty-prebuilt-multiarch": "^0.13.1",
+    "@tailwindcss/postcss": "^4.2.2",
+    "@types/node": "^25.5.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-web-links": "^0.12.0",
+    "@xterm/xterm": "^6.0.0",
+    "chokidar": "^5.0.0",
+    "concurrently": "^9.2.1",
+    "lucide-react": "^0.577.0",
+    "nanoid": "^3.3.11",
+    "next": "^16.2.1",
+    "postcss": "^8.5.8",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "tailwindcss": "^4.2.2",
+    "typescript": "^5.9.3",
+    "ws": "^8.20.0",
+    "yaml": "^2.8.3"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1"
+  }
+}

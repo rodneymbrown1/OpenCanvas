@@ -1,0 +1,35 @@
+workspace:
+  root: /Users/rodneymbrown/Software/picasso-imports/Court of Appeals
+agent:
+  active: claude
+  claude:
+    mode: cli
+    permissions:
+      read: true
+      write: true
+      execute: true
+      web: true
+  codex:
+    mode: cli
+    permissions:
+      read: true
+      write: true
+      execute: true
+      web: true
+  gemini:
+    mode: cli
+    permissions:
+      read: true
+      write: true
+      execute: true
+      web: true
+api_keys: null
+mcp_servers: []
+server:
+  port: 3000
+  pty_port: 3001
+  auth_token: ""
+preferences:
+  persist_jobs: true
+  default_stack: nextjs-tailwind
+  theme: dark
