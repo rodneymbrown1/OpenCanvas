@@ -132,12 +132,30 @@ export function AgentTerminal({
           term.write(msg.data);
           break;
 
-        case "session":
+        case "session": {
           gotSessionRef.current = true;
-          log("info", `✓ Session confirmed: id=${msg.session.id} agent=${msg.session.agent} pid=${msg.session.pid} status=${msg.session.status}`);
-          term.writeln(`\x1b[36m[Open Canvas]\x1b[0m Session ${msg.session.id} (PID: ${msg.session.pid || "starting"})`);
-          onSessionCreated?.(msg.session.id);
+          const s = msg.session;
+          log("info", `✓ Session: id=${s.id} agent=${s.agent} pid=${s.pid} status=${s.status}`);
+
+          if (s.status === "completed" || s.status === "failed") {
+            // Session already ended — show buffered output but don't treat as live
+            log("warn", `Session ${s.id} is ${s.status} — displaying history only`);
+            term.writeln(`\x1b[33m[Open Canvas]\x1b[0m Session ${s.id} has already ${s.status} (exit code: ${s.exitCode ?? "?"})`);
+            term.writeln(`\x1b[90mBuffered output shown below. Click "connect" to start a new session.\x1b[0m`);
+            // Don't call onSessionCreated — this prevents the reconnect loop
+            // Close the WebSocket after receiving buffered output
+            setTimeout(() => {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.close();
+              }
+              onReconnectFailed?.();
+            }, 500);
+          } else {
+            term.writeln(`\x1b[36m[Open Canvas]\x1b[0m Session ${s.id} (PID: ${s.pid || "starting"})`);
+            onSessionCreated?.(s.id);
+          }
           break;
+        }
 
         case "exit":
           log("warn", `Agent exited: code=${msg.code}`);
