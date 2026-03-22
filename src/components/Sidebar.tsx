@@ -32,8 +32,10 @@ export function Sidebar() {
       {/* Logo → Project Manager */}
       <button
         onClick={() => setView("projects")}
-        className={`w-9 h-9 rounded-lg flex items-center justify-center mb-4 transition-opacity ${
-          view === "projects" ? "ring-2 ring-[var(--accent)] ring-offset-1 ring-offset-[var(--bg-secondary)]" : "hover:opacity-80"
+        className={`w-9 h-9 rounded-lg flex items-center justify-center mb-4 transition-colors ${
+          view === "projects"
+            ? "bg-[var(--bg-tertiary)] ring-2 ring-[var(--accent)] ring-offset-1 ring-offset-[var(--bg-secondary)]"
+            : "hover:bg-[var(--bg-tertiary)] hover:ring-1 hover:ring-[var(--border)]"
         }`}
         title="Project Manager"
       >

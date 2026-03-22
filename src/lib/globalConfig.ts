@@ -53,9 +53,11 @@ export function setupGlobalConfig(customHome?: string): GlobalConfig {
   const sharedData = path.join(home, "shared-data");
   const configPath = path.join(home, "global.yaml");
 
-  // Create directories
+  // Create directories — including raw/formatted pipeline dirs
   fs.mkdirSync(home, { recursive: true });
   fs.mkdirSync(sharedData, { recursive: true });
+  fs.mkdirSync(path.join(sharedData, "raw"), { recursive: true });
+  fs.mkdirSync(path.join(sharedData, "formatted"), { recursive: true });
 
   const config: GlobalConfig = {
     ...DEFAULT_GLOBAL_CONFIG,
@@ -146,7 +148,7 @@ export function listSharedData(): { name: string; path: string; size: number }[]
   try {
     return fs
       .readdirSync(SHARED_DATA_DIR, { withFileTypes: true })
-      .filter((d) => !d.name.startsWith("."))
+      .filter((d) => !d.name.startsWith(".") && d.name !== "raw" && d.name !== "formatted")
       .map((d) => {
         const fullPath = path.join(SHARED_DATA_DIR, d.name);
         const stat = fs.statSync(fullPath);
@@ -155,4 +157,124 @@ export function listSharedData(): { name: string; path: string; size: number }[]
   } catch {
     return [];
   }
+}
+
+// ── Global Data Pipeline ─────────────────────────────────────────────────
+
+interface GlobalDataFile {
+  name: string;
+  path: string;
+  size: number;
+  dir: "raw" | "formatted" | "root";
+  formattedPath?: string; // path to formatted .md if it exists
+}
+
+export interface GlobalDataStatus {
+  sharedDataDir: string;
+  rawFiles: GlobalDataFile[];
+  formattedFiles: GlobalDataFile[];
+  rootFiles: GlobalDataFile[];
+  totalFiles: number;
+  hasSkillsMd: boolean;
+  unformatted: string[]; // raw files with no matching formatted .md
+}
+
+function listDirFiles(dir: string, category: "raw" | "formatted" | "root"): GlobalDataFile[] {
+  if (!fs.existsSync(dir)) return [];
+  try {
+    return fs
+      .readdirSync(dir, { withFileTypes: true })
+      .filter((d) => d.isFile() && !d.name.startsWith("."))
+      .map((d) => {
+        const fullPath = path.join(dir, d.name);
+        const stat = fs.statSync(fullPath);
+        return { name: d.name, path: fullPath, size: stat.size, dir: category };
+      });
+  } catch {
+    return [];
+  }
+}
+
+export function getGlobalDataStatus(): GlobalDataStatus {
+  const rawDir = path.join(SHARED_DATA_DIR, "raw");
+  const formattedDir = path.join(SHARED_DATA_DIR, "formatted");
+
+  const rawFiles = listDirFiles(rawDir, "raw");
+  const formattedFiles = listDirFiles(formattedDir, "formatted");
+  const rootFiles = listDirFiles(SHARED_DATA_DIR, "root").filter(
+    (f) => f.name !== ".DS_Store" && f.name !== "skills.md"
+  );
+
+  const hasSkillsMd = fs.existsSync(path.join(SHARED_DATA_DIR, "skills.md"));
+
+  // Build set of formatted base names (without .md extension)
+  const formattedNames = new Set(
+    formattedFiles.map((f) => f.name.replace(/\.md$/, ""))
+  );
+
+  // Find raw files that have no corresponding formatted version
+  const unformatted = rawFiles
+    .filter((f) => {
+      const baseName = f.name.replace(/\.[^.]+$/, "");
+      return !formattedNames.has(baseName);
+    })
+    .map((f) => f.name);
+
+  // Annotate raw files with their formatted counterpart path if it exists
+  for (const raw of rawFiles) {
+    const baseName = raw.name.replace(/\.[^.]+$/, "");
+    const fmtPath = path.join(formattedDir, baseName + ".md");
+    if (fs.existsSync(fmtPath)) {
+      raw.formattedPath = fmtPath;
+    }
+  }
+
+  return {
+    sharedDataDir: SHARED_DATA_DIR,
+    rawFiles,
+    formattedFiles,
+    rootFiles,
+    totalFiles: rawFiles.length + formattedFiles.length + rootFiles.length,
+    hasSkillsMd,
+    unformatted,
+  };
+}
+
+/**
+ * Link a global data file into a project.
+ * Creates a reference file (symlink on unix, copy on windows) in the project's data/ dir.
+ * Points to the formatted .md if available, otherwise the raw file.
+ */
+export function linkGlobalToProject(fileName: string, projectDataDir: string): string {
+  const formattedDir = path.join(SHARED_DATA_DIR, "formatted");
+  const rawDir = path.join(SHARED_DATA_DIR, "raw");
+
+  const baseName = fileName.replace(/\.[^.]+$/, "");
+  const formattedPath = path.join(formattedDir, baseName + ".md");
+  const rawPath = path.join(rawDir, fileName);
+
+  // Prefer formatted .md, fall back to raw
+  const sourcePath = fs.existsSync(formattedPath) ? formattedPath : rawPath;
+  if (!fs.existsSync(sourcePath)) {
+    throw new Error(`Global file not found: ${fileName}`);
+  }
+
+  // Create project data dir if needed
+  fs.mkdirSync(projectDataDir, { recursive: true });
+
+  const linkName = fs.existsSync(formattedPath)
+    ? baseName + ".md"
+    : fileName;
+  const targetPath = path.join(projectDataDir, linkName);
+
+  // Create symlink (falls back to copy on error)
+  try {
+    if (fs.existsSync(targetPath)) fs.unlinkSync(targetPath);
+    fs.symlinkSync(sourcePath, targetPath);
+  } catch {
+    // Symlink failed (e.g., Windows without dev mode) — fall back to copy
+    fs.copyFileSync(sourcePath, targetPath);
+  }
+
+  return targetPath;
 }
