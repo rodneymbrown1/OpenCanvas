@@ -128,7 +128,7 @@ export default function PortsPage() {
                     </p>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
-                    {p.port >= 3000 && p.port <= 9999 && (
+                    {p.port >= 3000 && p.port <= 9999 && !p.label.includes("PTY") && !p.label.includes("debugger") && (
                       <a
                         href={`http://localhost:${p.port}`}
                         target="_blank"
