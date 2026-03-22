@@ -9,6 +9,7 @@ import {
   BarChart3,
   Settings,
   FileText,
+  Wifi,
   Sun,
   Moon,
 } from "lucide-react";
@@ -18,6 +19,7 @@ const NAV_ITEMS = [
   { href: "/workspace", icon: FolderOpen, label: "Workspace" },
   { href: "/jobs", icon: Activity, label: "Jobs" },
   { href: "/usage", icon: BarChart3, label: "Usage" },
+  { href: "/ports", icon: Wifi, label: "Ports" },
   { href: "/project", icon: FileText, label: "Project" },
   { href: "/settings", icon: Settings, label: "Settings" },
 ];
