@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { FileExplorer } from "@/components/FileExplorer";
 import { AgentTerminal } from "@/components/Terminal";
 import { AgentSelector, useActiveAgent } from "@/components/AgentSelector";
 import { FilePreviewModal } from "@/components/FilePreviewModal";
 import { ConnectAgentModal } from "@/components/ConnectAgentModal";
+import { FolderPickerModal } from "@/components/FolderPickerModal";
 import Image from "next/image";
 import {
   PanelLeftClose,
@@ -14,6 +15,7 @@ import {
   PanelBottomOpen,
   FolderOpen,
   GripHorizontal,
+  GripVertical,
   Loader2,
 } from "lucide-react";
 
@@ -22,10 +24,13 @@ export default function WorkspacePage() {
   const [workDir, setWorkDir] = useState("");
   const [showExplorer, setShowExplorer] = useState(true);
   const [showTerminal, setShowTerminal] = useState(true);
+  const [explorerWidth, setExplorerWidth] = useState(224);
   const [terminalHeight, setTerminalHeight] = useState(280);
-  const [isDragging, setIsDragging] = useState(false);
+  const [draggingTerminal, setDraggingTerminal] = useState(false);
+  const [draggingExplorer, setDraggingExplorer] = useState(false);
   const [previewFile, setPreviewFile] = useState<string | null>(null);
   const [showConnectModal, setShowConnectModal] = useState(false);
+  const [showFolderPicker, setShowFolderPicker] = useState(false);
   const [agentConnected, setAgentConnected] = useState(false);
   const [ptyReady, setPtyReady] = useState(false);
   const [ptyStarting, setPtyStarting] = useState(false);
@@ -54,70 +59,72 @@ export default function WorkspacePage() {
     }
   }, []);
 
-  // Start PTY server if not running
   const startPtyServer = useCallback(async () => {
     setPtyStarting(true);
-    console.log("[OpenCanvas] Starting PTY server...");
     try {
       const res = await fetch("/api/pty-status", { method: "POST" });
       const data = await res.json();
-      console.log("[OpenCanvas] PTY start response:", data);
       if (data.started) {
-        // Poll until ready
         for (let i = 0; i < 5; i++) {
           await new Promise((r) => setTimeout(r, 1000));
           const ready = await checkPtyServer();
-          if (ready) {
-            console.log("[OpenCanvas] PTY server is ready");
-            break;
-          }
+          if (ready) break;
         }
       }
-    } catch (err) {
-      console.error("[OpenCanvas] Failed to start PTY server:", err);
-    }
+    } catch {}
     setPtyStarting(false);
   }, [checkPtyServer]);
 
-  // On mount: check PTY server, auto-start if needed
   useEffect(() => {
     checkPtyServer().then((running) => {
-      if (!running) {
-        console.log("[OpenCanvas] PTY server not running, starting...");
-        startPtyServer();
-      }
+      if (!running) startPtyServer();
     });
   }, [checkPtyServer, startPtyServer]);
 
-  const handleDrag = useCallback(
-    (e: React.MouseEvent) => {
-      if (!isDragging) return;
-      const newHeight = window.innerHeight - e.clientY;
-      setTerminalHeight(
-        Math.max(120, Math.min(newHeight, window.innerHeight - 200))
-      );
+  // Drag handlers
+  const handleMouseMove = useCallback(
+    (e: MouseEvent) => {
+      if (draggingTerminal) {
+        const newHeight = window.innerHeight - e.clientY;
+        setTerminalHeight(Math.max(120, Math.min(newHeight, window.innerHeight - 200)));
+      }
+      if (draggingExplorer) {
+        const newWidth = e.clientX - 56; // subtract sidebar width
+        setExplorerWidth(Math.max(150, Math.min(newWidth, 500)));
+      }
     },
-    [isDragging]
+    [draggingTerminal, draggingExplorer]
   );
 
-  const setWorkspace = async () => {
-    const dir = prompt("Enter the path to your project folder:");
-    if (!dir?.trim()) return;
+  const handleMouseUp = useCallback(() => {
+    setDraggingTerminal(false);
+    setDraggingExplorer(false);
+  }, []);
+
+  useEffect(() => {
+    if (draggingTerminal || draggingExplorer) {
+      window.addEventListener("mousemove", handleMouseMove);
+      window.addEventListener("mouseup", handleMouseUp);
+      return () => {
+        window.removeEventListener("mousemove", handleMouseMove);
+        window.removeEventListener("mouseup", handleMouseUp);
+      };
+    }
+  }, [draggingTerminal, draggingExplorer, handleMouseMove, handleMouseUp]);
+
+  const handleFolderSelect = async (path: string) => {
     await fetch("/api/config", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workspace: { root: dir.trim() } }),
+      body: JSON.stringify({ workspace: { root: path } }),
     });
-    setWorkDir(dir.trim());
+    setWorkDir(path);
+    setShowFolderPicker(false);
   };
 
   const handleConnect = async () => {
-    // Ensure PTY server is running before connecting
     const ready = await checkPtyServer();
-    if (!ready) {
-      console.log("[OpenCanvas] PTY not ready, starting...");
-      await startPtyServer();
-    }
+    if (!ready) await startPtyServer();
     setAgentConnected(true);
     setShowConnectModal(false);
     setShowTerminal(true);
@@ -125,10 +132,9 @@ export default function WorkspacePage() {
 
   return (
     <div
-      className="flex flex-col h-screen select-none"
-      onMouseMove={handleDrag}
-      onMouseUp={() => setIsDragging(false)}
-      onMouseLeave={() => setIsDragging(false)}
+      className={`flex flex-col h-screen ${
+        draggingTerminal || draggingExplorer ? "select-none cursor-col-resize" : ""
+      }`}
     >
       {/* Top bar */}
       <div className="flex items-center justify-between px-3 py-1.5 bg-[var(--bg-secondary)] border-b border-[var(--border)] shrink-0">
@@ -138,34 +144,27 @@ export default function WorkspacePage() {
             className="w-7 h-7 rounded-md flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] transition-colors"
             title={showExplorer ? "Hide Explorer" : "Show Explorer"}
           >
-            {showExplorer ? (
-              <PanelLeftClose size={16} />
-            ) : (
-              <PanelLeftOpen size={16} />
-            )}
+            {showExplorer ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
           </button>
 
-          {workDir ? (
-            <button
-              onClick={setWorkspace}
-              className="flex items-center gap-1.5 text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors"
-            >
-              <FolderOpen size={13} />
+          <button
+            onClick={() => setShowFolderPicker(true)}
+            className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors ${
+              workDir
+                ? "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+                : "text-[var(--accent)] hover:bg-[var(--bg-tertiary)]"
+            }`}
+          >
+            <FolderOpen size={13} />
+            {workDir ? (
               <span className="truncate max-w-[300px]">{workDir}</span>
-            </button>
-          ) : (
-            <button
-              onClick={setWorkspace}
-              className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs text-[var(--accent)] hover:bg-[var(--bg-tertiary)] transition-colors"
-            >
-              <FolderOpen size={13} />
-              Select Folder
-            </button>
-          )}
+            ) : (
+              "Select Folder"
+            )}
+          </button>
         </div>
 
         <div className="flex items-center gap-2">
-          {/* PTY status indicator */}
           <div className="flex items-center gap-1.5 text-[10px] text-[var(--text-muted)]">
             <span
               className={`w-1.5 h-1.5 rounded-full ${
@@ -186,31 +185,50 @@ export default function WorkspacePage() {
             className="w-7 h-7 rounded-md flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] transition-colors"
             title={showTerminal ? "Hide Terminal" : "Show Terminal"}
           >
-            {showTerminal ? (
-              <PanelBottomClose size={16} />
-            ) : (
-              <PanelBottomOpen size={16} />
-            )}
+            {showTerminal ? <PanelBottomClose size={16} /> : <PanelBottomOpen size={16} />}
           </button>
         </div>
       </div>
 
       {/* Main content */}
       <div className="flex flex-1 min-h-0">
+        {/* File explorer (resizable) */}
         {showExplorer && (
-          <div className="w-56 border-r border-[var(--border)] bg-[var(--bg-secondary)] overflow-hidden shrink-0">
-            {workDir ? (
-              <FileExplorer onFilePreview={setPreviewFile} />
-            ) : (
-              <div className="p-3 text-xs text-[var(--text-muted)]">
-                Select a folder to browse files.
-              </div>
-            )}
-          </div>
+          <>
+            <div
+              style={{ width: explorerWidth }}
+              className="border-r border-[var(--border)] bg-[var(--bg-secondary)] overflow-hidden shrink-0"
+            >
+              {workDir ? (
+                <FileExplorer onFilePreview={setPreviewFile} />
+              ) : (
+                <div className="p-3 space-y-3">
+                  <p className="text-xs text-[var(--text-muted)]">
+                    No folder open.
+                  </p>
+                  <button
+                    onClick={() => setShowFolderPicker(true)}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-[var(--bg-primary)] border border-[var(--border)] hover:border-[var(--accent)] text-xs text-[var(--text-secondary)] transition-colors"
+                  >
+                    <FolderOpen size={14} className="text-[var(--accent)]" />
+                    Open Folder
+                  </button>
+                </div>
+              )}
+            </div>
+            {/* Vertical resize handle */}
+            <div
+              className="w-1 bg-[var(--border)] cursor-col-resize hover:bg-[var(--accent)] transition-colors shrink-0 flex items-center justify-center"
+              onMouseDown={() => setDraggingExplorer(true)}
+            >
+              <GripVertical size={10} className="text-[var(--text-muted)] opacity-0 hover:opacity-100" />
+            </div>
+          </>
         )}
 
+        {/* Main area */}
         <div className="flex-1 flex flex-col min-h-0 min-w-0">
-          {/* App preview area */}
+          {/* App preview */}
           <div className="flex-1 min-h-0 overflow-hidden bg-[var(--bg-primary)]">
             {appPort ? (
               <iframe
@@ -243,18 +261,12 @@ export default function WorkspacePage() {
             <>
               <div
                 className="h-1 bg-[var(--border)] cursor-row-resize flex items-center justify-center hover:bg-[var(--accent)] transition-colors shrink-0"
-                onMouseDown={() => setIsDragging(true)}
+                onMouseDown={() => setDraggingTerminal(true)}
               >
-                <GripHorizontal
-                  size={10}
-                  className="text-[var(--text-muted)]"
-                />
+                <GripHorizontal size={10} className="text-[var(--text-muted)]" />
               </div>
 
-              <div
-                style={{ height: terminalHeight }}
-                className="min-h-[120px] shrink-0"
-              >
+              <div style={{ height: terminalHeight }} className="min-h-[120px] shrink-0">
                 {agentConnected && ptyReady && workDir ? (
                   <AgentTerminal agent={agent} cwd={workDir} />
                 ) : (
@@ -316,18 +328,21 @@ export default function WorkspacePage() {
         </div>
       </div>
 
+      {/* Modals */}
       {previewFile && (
-        <FilePreviewModal
-          filePath={previewFile}
-          onClose={() => setPreviewFile(null)}
-        />
+        <FilePreviewModal filePath={previewFile} onClose={() => setPreviewFile(null)} />
       )}
-
       {showConnectModal && (
         <ConnectAgentModal
           agent={agent}
           onClose={() => setShowConnectModal(false)}
           onConnected={handleConnect}
+        />
+      )}
+      {showFolderPicker && (
+        <FolderPickerModal
+          onSelect={handleFolderSelect}
+          onClose={() => setShowFolderPicker(false)}
         />
       )}
     </div>

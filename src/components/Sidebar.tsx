@@ -9,7 +9,10 @@ import {
   BarChart3,
   Settings,
   FileText,
+  Sun,
+  Moon,
 } from "lucide-react";
+import { useTheme } from "@/lib/useTheme";
 
 const NAV_ITEMS = [
   { href: "/workspace", icon: FolderOpen, label: "Workspace" },
@@ -21,6 +24,7 @@ const NAV_ITEMS = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const [theme, toggleTheme] = useTheme();
 
   return (
     <aside className="w-14 bg-[var(--bg-secondary)] border-r border-[var(--border)] flex flex-col items-center py-4 gap-2">
@@ -56,6 +60,18 @@ export function Sidebar() {
           </Link>
         );
       })}
+
+      {/* Spacer to push theme toggle to bottom */}
+      <div className="flex-1" />
+
+      {/* Theme toggle */}
+      <button
+        onClick={toggleTheme}
+        className="w-10 h-10 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] transition-colors"
+        title={theme === "dark" ? "Switch to Light Mode" : "Switch to Dark Mode"}
+      >
+        {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+      </button>
     </aside>
   );
 }
