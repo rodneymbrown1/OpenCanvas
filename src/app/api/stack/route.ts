@@ -19,9 +19,14 @@ export async function POST(req: NextRequest) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      return NextResponse.json(await res.json(), { status: res.status });
-    } catch {
-      return NextResponse.json({ error: "PTY server unreachable" }, { status: 503 });
+      const data = await res.json();
+      return NextResponse.json(data, { status: res.status });
+    } catch (err) {
+      console.error("[api/stack] start failed:", err);
+      return NextResponse.json(
+        { error: "PTY server unreachable. Make sure to run: npm run open-canvas" },
+        { status: 503 }
+      );
     }
   }
 
@@ -32,9 +37,14 @@ export async function POST(req: NextRequest) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      return NextResponse.json(await res.json(), { status: res.status });
-    } catch {
-      return NextResponse.json({ error: "PTY server unreachable" }, { status: 503 });
+      const data = await res.json();
+      return NextResponse.json(data, { status: res.status });
+    } catch (err) {
+      console.error("[api/stack] stop failed:", err);
+      return NextResponse.json(
+        { error: "PTY server unreachable" },
+        { status: 503 }
+      );
     }
   }
 

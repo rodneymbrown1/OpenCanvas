@@ -234,7 +234,14 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         body: JSON.stringify({ agent: session.agent, cwd: session.workDir }),
       });
       const data = await res.json();
-      if (data.session) {
+      if (data.error) {
+        console.error("[startApp]", data.error);
+        setState((prev) => ({
+          ...prev,
+          appStatus: "error",
+          startupLog: [data.error],
+        }));
+      } else if (data.session) {
         setState((prev) => ({
           ...prev,
           stackSessionId: data.session.id,
@@ -242,10 +249,19 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
           appPort: data.session.detectedPort || prev.appPort,
         }));
       } else {
-        setState((prev) => ({ ...prev, appStatus: "error" }));
+        setState((prev) => ({
+          ...prev,
+          appStatus: "error",
+          startupLog: ["Unknown error — no session returned"],
+        }));
       }
-    } catch {
-      setState((prev) => ({ ...prev, appStatus: "error" }));
+    } catch (err) {
+      console.error("[startApp] fetch failed:", err);
+      setState((prev) => ({
+        ...prev,
+        appStatus: "error",
+        startupLog: ["Cannot reach PTY server. Run: npm run open-canvas"],
+      }));
     }
   }, [session.workDir, session.agent]);
 
