@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { RefreshCw, Globe, Database, Terminal, Server, Wifi, ExternalLink } from "lucide-react";
+import { RefreshCw, Globe, Database, Terminal, Server, Wifi, ExternalLink, X } from "lucide-react";
 
 interface PortInfo {
   port: number;
@@ -36,9 +36,28 @@ export default function PortsPage() {
     setLoading(false);
   }, []);
 
+  const [killing, setKilling] = useState<number | null>(null);
+
   useEffect(() => {
     fetchPorts();
   }, [fetchPorts]);
+
+  const killPort = async (pid: number, port: number) => {
+    const name = ports.find((p) => p.port === port);
+    if (!confirm(`Kill process "${name?.process}" on port ${port} (PID ${pid})?`)) return;
+    setKilling(port);
+    try {
+      await fetch("/api/ports/kill", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pid, port }),
+      });
+      // Wait briefly then refresh
+      await new Promise((r) => setTimeout(r, 500));
+      await fetchPorts();
+    } catch {}
+    setKilling(null);
+  };
 
   const devPorts = ports.filter((p) => p.label);
   const otherPorts = ports.filter((p) => !p.label);
@@ -108,17 +127,28 @@ export default function PortsPage() {
                       {p.user && ` &middot; ${p.user}`}
                     </p>
                   </div>
-                  {p.port >= 3000 && p.port <= 9999 && (
-                    <a
-                      href={`http://localhost:${p.port}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] text-[var(--text-muted)] hover:text-[var(--accent)] hover:bg-[var(--bg-tertiary)] transition-colors"
+                  <div className="flex items-center gap-1 shrink-0">
+                    {p.port >= 3000 && p.port <= 9999 && (
+                      <a
+                        href={`http://localhost:${p.port}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] text-[var(--text-muted)] hover:text-[var(--accent)] hover:bg-[var(--bg-tertiary)] transition-colors"
+                      >
+                        <ExternalLink size={11} />
+                        Open
+                      </a>
+                    )}
+                    <button
+                      onClick={() => killPort(p.pid, p.port)}
+                      disabled={killing === p.port}
+                      className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] text-[var(--text-muted)] hover:text-[var(--error)] hover:bg-[var(--bg-tertiary)] transition-colors disabled:opacity-40"
+                      title={`Kill port ${p.port}`}
                     >
-                      <ExternalLink size={11} />
-                      Open
-                    </a>
-                  )}
+                      <X size={11} />
+                      Kill
+                    </button>
+                  </div>
                 </div>
               );
             })}
@@ -149,6 +179,15 @@ export default function PortsPage() {
                 <span className="text-[10px] text-[var(--text-muted)]">
                   PID {p.pid}
                 </span>
+                <button
+                  onClick={() => killPort(p.pid, p.port)}
+                  disabled={killing === p.port}
+                  className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] text-[var(--text-muted)] hover:text-[var(--error)] hover:bg-[var(--bg-tertiary)] transition-colors disabled:opacity-40"
+                  title={`Kill port ${p.port}`}
+                >
+                  <X size={11} />
+                  Kill
+                </button>
               </div>
             ))}
           </div>
