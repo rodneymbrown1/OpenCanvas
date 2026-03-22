@@ -83,6 +83,48 @@ Manage multiple projects from one Open Canvas instance. Open projects in new tab
 
 ---
 
+## Walkthrough
+
+### 1. Create a Project
+
+Open the Project Manager and create a new project. Open Canvas sets up the directory with `data/` and `apps/` folders.
+
+![Start a Project](assets/demo/start%20a%20project.jpg)
+![Name Your Project](assets/demo/start-project-2.jpg)
+![Project Created](assets/demo/start-project-3.jpg)
+
+### 2. Your Workspace
+
+A blank slate project with file explorer, app preview area, and terminal. Drag files in from your desktop.
+
+![Initial Workspace](assets/demo/initial-project-workspace.jpg)
+
+### 3. Connect a Coding Agent
+
+Open Canvas detects which agents are installed on your machine. Click connect.
+
+![Connect Agent](assets/demo/connect%20coding%20agent.jpg)
+
+### 4. Switch Between Agents
+
+Connected to Claude? Switch to Codex or Gemini with one click. Same project, different agent.
+
+![Switch Agents](assets/demo/swtich%20between%20agents.jpg)
+
+### 5. Jobs, Usage, and Ports
+
+Track active sessions, monitor token spend, and manage ports — all in dedicated views.
+
+![Jobs, Usage, Ports](assets/demo/jobs-usage-ports-views.jpg)
+
+### 6. Global Data and Settings
+
+Manage shared data across projects and configure agents, API keys, MCP servers, and project settings.
+
+![Global Data & Settings](assets/demo/global-data-and-settings.png)
+
+---
+
 ## Coming Soon
 
 - **Open Canvas Launcher** — desktop app to launch Open Canvas without the terminal
