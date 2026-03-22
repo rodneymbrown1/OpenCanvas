@@ -21,49 +21,73 @@ import {
 } from "lucide-react";
 
 function RunAppButton({ sessionId }: { sessionId: string }) {
+  const { state: project } = useProject();
   const [sending, setSending] = useState(false);
-  const [sent, setSent] = useState(false);
+  const [waiting, setWaiting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // When app port detected, stop waiting
+  useEffect(() => {
+    if (project.appPort && waiting) {
+      setWaiting(false);
+    }
+  }, [project.appPort, waiting]);
 
   const handleRun = async () => {
     setSending(true);
+    setError(null);
     try {
       const res = await fetch(`/api/sessions/${sessionId}/input`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          command: "npm run dev",
-        }),
+        body: JSON.stringify({ command: "npm run dev" }),
       });
       if (res.ok) {
-        setSent(true);
+        setWaiting(true);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || "Failed to send command");
       }
-    } catch (e) {
-      console.error("Failed to send run command:", e);
+    } catch {
+      setError("Cannot reach agent session");
     } finally {
       setSending(false);
     }
   };
 
-  if (sent) {
+  if (waiting) {
     return (
-      <div className="space-y-2">
+      <div className="space-y-3 max-w-md">
         <div className="flex items-center justify-center gap-2 text-xs text-[var(--accent)]">
           <Loader2 size={14} className="animate-spin" />
-          <span>Starting app... preview will appear automatically</span>
+          <span>Starting app...</span>
         </div>
+        {/* Show startup log from terminal output */}
+        {project.startupLog.length > 0 && (
+          <div className="bg-[var(--bg-secondary)] rounded-lg border border-[var(--border)] p-3 text-left">
+            <pre className="text-[10px] leading-relaxed text-[var(--text-muted)] font-mono whitespace-pre-wrap max-h-32 overflow-y-auto">
+              {project.startupLog.slice(-10).join("\n")}
+            </pre>
+          </div>
+        )}
       </div>
     );
   }
 
   return (
-    <button
-      onClick={handleRun}
-      disabled={sending}
-      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
-    >
-      <Play size={14} />
-      {sending ? "Starting..." : "Run App"}
-    </button>
+    <div className="space-y-2">
+      <button
+        onClick={handleRun}
+        disabled={sending}
+        className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
+      >
+        <Play size={14} />
+        {sending ? "Sending..." : "Run App"}
+      </button>
+      {error && (
+        <p className="text-xs text-[var(--error)]">{error}</p>
+      )}
+    </div>
   );
 }
 

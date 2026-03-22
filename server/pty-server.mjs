@@ -53,6 +53,11 @@ const AGENT_COMMANDS = {
 
 const sessions = new Map();
 
+// Strip ANSI escape codes for clean text
+function stripAnsi(str) {
+  return str.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, "").replace(/\x1B\][^\x07]*\x07/g, "");
+}
+
 function createSession(agent, cwd) {
   const id = randomUUID().slice(0, 8);
   const session = {
@@ -67,6 +72,8 @@ function createSession(agent, cwd) {
     inputBytes: 0,
     outputLines: 0,
     pid: null,
+    lastOutput: [],    // Last 20 lines of clean text
+    detectedPort: null, // Port detected from output (e.g., "localhost:3002")
   };
   sessions.set(id, session);
   return session;
@@ -224,6 +231,27 @@ wss.on("connection", (ws) => {
           ptyProcess.onData((data) => {
             session.outputBytes += Buffer.byteLength(data);
             session.outputLines += (data.match(/\n/g) || []).length;
+
+            // Capture clean text lines for lastOutput and port detection
+            const clean = stripAnsi(data);
+            const lines = clean.split("\n").filter((l) => l.trim());
+            for (const line of lines) {
+              session.lastOutput.push(line.trim());
+              if (session.lastOutput.length > 20) session.lastOutput.shift();
+
+              // Detect port from common dev server patterns
+              if (!session.detectedPort) {
+                // Matches: localhost:3002, 127.0.0.1:8080, http://localhost:3002
+                const portMatch = line.match(/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d{4,5})/);
+                if (portMatch) {
+                  const port = parseInt(portMatch[1], 10);
+                  if (port >= 3000 && port <= 9999 && port !== 3000 && port !== 3001) {
+                    session.detectedPort = port;
+                    console.log(`[pty-server] session=${session.id} detected app port: ${port}`);
+                  }
+                }
+              }
+            }
 
             const proc = activeProcesses.get(session.id);
             if (proc) {

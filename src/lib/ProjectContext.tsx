@@ -38,6 +38,7 @@ interface ProjectState {
   appPort: number | null;
   appStatus: AppStatus;
   detectedPorts: PortInfo[];
+  startupLog: string[];
   iframeKey: number;
 }
 
@@ -64,6 +65,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     appPort: null,
     appStatus: "idle",
     detectedPorts: [],
+    startupLog: [],
     iframeKey: 0,
   });
 
@@ -73,7 +75,50 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   // Debounce: port must appear in 2 consecutive polls
   const candidatePortRef = useRef<number | null>(null);
 
-  // ── Port auto-detection polling ─────────────────────────────────────────
+  // ── Session-based port detection (fast — from PTY output parsing) ───────
+
+  useEffect(() => {
+    if (!session.sessionId || session.sessionId === "pending" || !session.agentConnected) return;
+    let cancelled = false;
+
+    async function pollSession() {
+      try {
+        const res = await fetch(`/api/sessions/${session.sessionId}`);
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        const s = data.session;
+        if (!s || cancelled) return;
+
+        setState((prev) => {
+          // If session detected a port and we don't have one yet, use it immediately
+          if (s.detectedPort && !prev.appPort) {
+            return {
+              ...prev,
+              appPort: s.detectedPort,
+              appStatus: "running",
+              startupLog: s.lastOutput || [],
+            };
+          }
+          // Always update startup log
+          if (s.lastOutput?.length > 0) {
+            return { ...prev, startupLog: s.lastOutput };
+          }
+          return prev;
+        });
+      } catch {
+        // ignore
+      }
+    }
+
+    pollSession();
+    const interval = setInterval(pollSession, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [session.sessionId, session.agentConnected]);
+
+  // ── Port auto-detection polling (fallback — from lsof scan) ─────────────
 
   useEffect(() => {
     let cancelled = false;
