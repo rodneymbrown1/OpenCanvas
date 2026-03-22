@@ -20,8 +20,7 @@ export default function RootLayout({
         <SessionProvider>
           <ViewProvider>
             <CanvasShell />
-            {/* Hidden: Next.js still needs children rendered for API routes */}
-            <div className="hidden">{children}</div>
+            {children}
           </ViewProvider>
         </SessionProvider>
       </body>
