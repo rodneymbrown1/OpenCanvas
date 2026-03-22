@@ -3,27 +3,23 @@
 import Image from "next/image";
 import {
   FolderOpen,
-  Activity,
-  BarChart3,
+  Bot,
+  DollarSign,
   Settings,
-  FileText,
   Wifi,
   Sun,
   Moon,
   Database,
-  Layers,
 } from "lucide-react";
 import { useTheme } from "@/lib/useTheme";
 import { useView, type ViewId } from "@/lib/ViewContext";
 
 const NAV_ITEMS: { id: ViewId; icon: typeof FolderOpen; label: string }[] = [
   { id: "workspace", icon: FolderOpen, label: "Workspace" },
-  { id: "jobs", icon: Activity, label: "Jobs" },
-  { id: "usage", icon: BarChart3, label: "Usage" },
+  { id: "jobs", icon: Bot, label: "Jobs" },
+  { id: "usage", icon: DollarSign, label: "Usage" },
   { id: "ports", icon: Wifi, label: "Ports" },
   { id: "data", icon: Database, label: "Data" },
-  { id: "projects", icon: Layers, label: "Projects" },
-  { id: "project", icon: FileText, label: "Config" },
   { id: "settings", icon: Settings, label: "Settings" },
 ];
 
@@ -33,10 +29,13 @@ export function Sidebar() {
 
   return (
     <aside className="w-14 bg-[var(--bg-secondary)] border-r border-[var(--border)] flex flex-col items-center py-4 gap-2">
+      {/* Logo → Project Manager */}
       <button
-        onClick={() => setView("workspace")}
-        className="w-9 h-9 rounded-lg flex items-center justify-center mb-4 hover:opacity-80 transition-opacity"
-        title="Open Canvas"
+        onClick={() => setView("projects")}
+        className={`w-9 h-9 rounded-lg flex items-center justify-center mb-4 transition-opacity ${
+          view === "projects" ? "ring-2 ring-[var(--accent)] ring-offset-1 ring-offset-[var(--bg-secondary)]" : "hover:opacity-80"
+        }`}
+        title="Project Manager"
       >
         <Image
           src="/open_canvas_logo.png"
@@ -46,6 +45,7 @@ export function Sidebar() {
           className="rounded"
         />
       </button>
+
       {NAV_ITEMS.map((item) => {
         const isActive = view === item.id;
         return (

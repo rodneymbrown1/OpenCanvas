@@ -3,6 +3,10 @@
 import { useState, useEffect } from "react";
 import { Save, RefreshCw } from "lucide-react";
 
+export function ProjectConfigPanel() {
+  return <ProjectConfigView />;
+}
+
 export default function ProjectConfigView() {
   const [yaml, setYaml] = useState("");
   const [loading, setLoading] = useState(true);

@@ -1,15 +1,17 @@
 "use client";
 
 import { useState } from "react";
-import { Key, Bot, Plug } from "lucide-react";
+import { Key, Bot, Plug, FileText } from "lucide-react";
 import { AgentSettingsPage } from "./SettingsAgentsView";
 import { ApiKeysPage } from "./SettingsApiKeysView";
 import { McpPage } from "./SettingsMcpView";
+import { ProjectConfigPanel } from "./ProjectConfigView";
 
 const TABS = [
   { id: "agents", icon: Bot, label: "Coding Agents" },
   { id: "api-keys", icon: Key, label: "API Keys" },
   { id: "mcp", icon: Plug, label: "MCP Servers" },
+  { id: "project", icon: FileText, label: "Project Config" },
 ] as const;
 
 type SettingsTab = (typeof TABS)[number]["id"];
@@ -19,7 +21,6 @@ export default function SettingsView() {
 
   return (
     <div className="flex h-full">
-      {/* Settings sidebar */}
       <div className="w-48 border-r border-[var(--border)] bg-[var(--bg-secondary)] p-3 space-y-1 shrink-0">
         <h2 className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider px-2 mb-3">
           Settings
@@ -40,11 +41,11 @@ export default function SettingsView() {
         ))}
       </div>
 
-      {/* Settings content */}
       <div className="flex-1 overflow-auto">
         {tab === "agents" && <AgentSettingsPage />}
         {tab === "api-keys" && <ApiKeysPage />}
         {tab === "mcp" && <McpPage />}
+        {tab === "project" && <ProjectConfigPanel />}
       </div>
     </div>
   );

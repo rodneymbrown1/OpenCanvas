@@ -10,7 +10,6 @@ const WorkspaceView = dynamic(() => import("@/views/WorkspaceView"), { ssr: fals
 const JobsView = dynamic(() => import("@/views/JobsView"), { ssr: false });
 const UsageView = dynamic(() => import("@/views/UsageView"), { ssr: false });
 const PortsView = dynamic(() => import("@/views/PortsView"), { ssr: false });
-const ProjectConfigView = dynamic(() => import("@/views/ProjectConfigView"), { ssr: false });
 const SettingsView = dynamic(() => import("@/views/SettingsView"), { ssr: false });
 const DataView = dynamic(() => import("@/views/DataView"), { ssr: false });
 const ProjectsView = dynamic(() => import("@/views/ProjectsView"), { ssr: false });
@@ -28,7 +27,6 @@ function ActiveView() {
     case "ports":
       return <PortsView />;
     case "project":
-      return <ProjectConfigView />;
     case "settings":
       return <SettingsView />;
     case "data":
