@@ -179,6 +179,18 @@ export default function ProjectsView() {
     setView("workspace");
   };
 
+  const handleOpenInNewTab = (project: ProjectEntry) => {
+    // Register the open
+    fetch("/api/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "register", path: project.path, name: project.name }),
+    }).catch(() => {});
+    // Open in new tab with project param
+    const url = `/workspace?project=${encodeURIComponent(project.path)}`;
+    window.open(url, "_blank");
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full text-[var(--text-muted)]">
@@ -266,6 +278,22 @@ export default function ProjectsView() {
           </div>
         )}
 
+        {/* Global info — above projects */}
+        <div className="p-3 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border)]">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <HardDrive size={14} className="text-[var(--accent)]" />
+              <span className="text-xs font-medium">Open Canvas Home</span>
+            </div>
+            {state.sharedData.length > 0 && (
+              <span className="text-[10px] text-[var(--text-muted)]">
+                {state.sharedData.length} shared file{state.sharedData.length !== 1 ? "s" : ""}
+              </span>
+            )}
+          </div>
+          <p className="text-[11px] font-mono text-[var(--text-muted)] mt-1 ml-5">{state.home}</p>
+        </div>
+
         {/* Projects grid */}
         {state.projects.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -301,12 +329,29 @@ export default function ProjectsView() {
                       )}
                     </div>
                     <div className="flex items-center gap-1 ml-2 shrink-0">
-                      {!isCurrent && (
+                      {!isCurrent ? (
+                        <>
+                          <button
+                            onClick={() => handleOpen(project)}
+                            className="px-2.5 py-1 rounded text-xs bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--accent)] border border-[var(--border)] transition-colors"
+                          >
+                            Open
+                          </button>
+                          <button
+                            onClick={() => handleOpenInNewTab(project)}
+                            className="w-6 h-6 rounded flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors"
+                            title="Open in new tab"
+                          >
+                            <ExternalLink size={12} />
+                          </button>
+                        </>
+                      ) : (
                         <button
-                          onClick={() => handleOpen(project)}
-                          className="px-2.5 py-1 rounded text-xs bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--accent)] border border-[var(--border)] transition-colors"
+                          onClick={() => handleOpenInNewTab(project)}
+                          className="px-2 py-1 rounded text-[10px] text-[var(--text-muted)] hover:text-[var(--accent)] border border-[var(--border)] transition-colors"
+                          title="Open in new tab"
                         >
-                          Open
+                          new tab
                         </button>
                       )}
                       <button
@@ -329,29 +374,6 @@ export default function ProjectsView() {
             <p className="text-xs mt-1">Add a project or open a folder to get started</p>
           </div>
         )}
-
-        {/* Global info */}
-        <div className="pt-4 border-t border-[var(--border)] space-y-3">
-          <div className="flex items-center gap-2">
-            <Settings2 size={14} className="text-[var(--text-muted)]" />
-            <span className="text-xs text-[var(--text-muted)]">Open Canvas Home</span>
-          </div>
-          <p className="text-[11px] font-mono text-[var(--text-muted)] pl-5">{state.home}</p>
-
-          {/* Shared data */}
-          {state.sharedData.length > 0 && (
-            <div className="pl-5 space-y-1">
-              <p className="text-xs text-[var(--text-muted)]">
-                Shared Data ({state.sharedData.length} files)
-              </p>
-              {state.sharedData.slice(0, 5).map((f) => (
-                <p key={f.path} className="text-[11px] font-mono text-[var(--text-muted)]">
-                  {f.name}
-                </p>
-              ))}
-            </div>
-          )}
-        </div>
       </div>
     </div>
   );

@@ -27,56 +27,95 @@ interface SessionContextType {
   disconnect: () => void;
 }
 
-const STORAGE_KEY = "oc-session";
-
 const SessionContext = createContext<SessionContextType | null>(null);
 
-function readStoredSession(): SessionState | null {
+// ── Per-project localStorage key ──────────────────────────────────────────
+// Each project gets its own storage so tabs with different projects
+// don't clobber each other's session state.
+
+function storageKey(workDir: string): string {
+  if (!workDir) return "oc-session";
+  // Slugify the path for a stable key
+  const slug = workDir.replace(/[^a-zA-Z0-9]/g, "_").substring(0, 80);
+  return `oc-session-${slug}`;
+}
+
+function getProjectFromUrl(): string {
+  if (typeof window === "undefined") return "";
+  const params = new URLSearchParams(window.location.search);
+  return params.get("project") || "";
+}
+
+function readStoredSession(workDir?: string): SessionState | null {
   if (typeof window === "undefined") return null;
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    // Try project-specific key first
+    if (workDir) {
+      const raw = localStorage.getItem(storageKey(workDir));
+      if (raw) return JSON.parse(raw);
+    }
+    // Fall back to generic key
+    const raw = localStorage.getItem("oc-session");
     if (raw) return JSON.parse(raw);
   } catch {}
   return null;
 }
 
 export function SessionProvider({ children }: { children: ReactNode }) {
+  // Read project from URL param on mount
+  const urlProject = getProjectFromUrl();
+
   const [session, setSession] = useState<SessionState>(() => {
-    const stored = readStoredSession();
+    const stored = readStoredSession(urlProject);
     if (stored) {
-      // Restore stored values but mark as NOT connected yet — auto-reconnect will verify
       return {
         agent: stored.agent || "claude",
-        workDir: stored.workDir || "",
+        workDir: urlProject || stored.workDir || "",
         sessionId: stored.sessionId,
         agentConnected: false,
       };
     }
-    return { agentConnected: false, sessionId: null, agent: "claude", workDir: "" };
+    return {
+      agentConnected: false,
+      sessionId: null,
+      agent: "claude",
+      workDir: urlProject || "",
+    };
   });
 
   const [autoReconnecting, setAutoReconnecting] = useState(false);
 
-  // ── Persist to localStorage on every state change ─────────────────────
+  // ── Persist to per-project localStorage on every state change ───────────
   useEffect(() => {
     if (typeof window === "undefined") return;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
+    const key = storageKey(session.workDir);
+    localStorage.setItem(key, JSON.stringify(session));
+    // Also update generic key as fallback
+    localStorage.setItem("oc-session", JSON.stringify(session));
   }, [session]);
 
-  // ── Auto-reconnect on mount ───────────────────────────────────────────
+  // ── Sync URL ?project= param when workDir changes ──────────────────────
+  useEffect(() => {
+    if (typeof window === "undefined" || !session.workDir) return;
+    const url = new URL(window.location.href);
+    const current = url.searchParams.get("project") || "";
+    if (current !== session.workDir) {
+      url.searchParams.set("project", session.workDir);
+      window.history.replaceState(null, "", url.toString());
+    }
+  }, [session.workDir]);
+
+  // ── Auto-reconnect on mount ─────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
 
     async function tryAutoReconnect() {
-      // 1. Get candidate from state (restored from localStorage)
       let candidateId = session.sessionId;
       let candidateAgent = session.agent;
       let candidateWorkDir = session.workDir;
 
-      // Skip "pending" placeholder
       if (candidateId === "pending") candidateId = null;
 
-      // 2. If no candidate from localStorage, check YAML config
       if (!candidateId) {
         try {
           const res = await fetch("/api/config");
@@ -91,13 +130,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
       setAutoReconnecting(true);
 
-      // 3. Verify session still exists on PTY server
       try {
         const res = await fetch(`/api/sessions/${candidateId}`);
         if (res.ok) {
           const data = await res.json();
           if (data.session?.status === "running") {
-            // Session is alive — reconnect
             if (!cancelled) {
               setSession({
                 agentConnected: true,
@@ -111,12 +148,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           }
         }
 
-        // Session is gone or not running — check for ANY running session
+        // Check for any running session matching this project's workDir
         const allRes = await fetch("/api/sessions");
         if (allRes.ok) {
           const allData = await allRes.json();
           const running = allData.sessions?.find(
-            (s: { status: string }) => s.status === "running"
+            (s: { status: string; cwd: string }) =>
+              s.status === "running" &&
+              (!candidateWorkDir || s.cwd === candidateWorkDir)
           );
           if (running && !cancelled) {
             setSession({
@@ -130,12 +169,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           }
         }
 
-        // Nothing running — clear stale state
         if (!cancelled) {
           clearPersistedSession();
         }
       } catch {
-        // PTY server not reachable — clear stale session to prevent reconnect loops
         if (!cancelled) {
           clearPersistedSession();
         }
@@ -148,14 +185,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-    // Only run once on mount
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Clear persisted session from both stores ──────────────────────────
+  // ── Clear persisted session ─────────────────────────────────────────────
   const clearPersistedSession = useCallback(() => {
     if (typeof window !== "undefined") {
-      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(storageKey(session.workDir));
+      localStorage.removeItem("oc-session");
     }
     setSession((s) => ({ ...s, agentConnected: false, sessionId: null }));
     fetch("/api/config", {
@@ -165,9 +202,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         session: { lastSessionId: null, connectedAt: null },
       }),
     }).catch(() => {});
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.workDir]);
 
-  // ── Public actions ────────────────────────────────────────────────────
+  // ── Public actions ──────────────────────────────────────────────────────
   const setAgent = useCallback((agent: AgentType) => {
     setSession((s) => ({ ...s, agent }));
   }, []);
@@ -179,7 +217,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const connect = useCallback(
     (sessionId: string) => {
       setSession((s) => ({ ...s, agentConnected: true, sessionId }));
-      // Persist to YAML asynchronously
       if (sessionId && sessionId !== "pending") {
         fetch("/api/config", {
           method: "PATCH",

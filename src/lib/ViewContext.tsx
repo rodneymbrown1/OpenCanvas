@@ -45,6 +45,16 @@ interface ViewContextType {
 
 const ViewContext = createContext<ViewContextType | null>(null);
 
+// ── URL helpers that preserve ?project= param ─────────────────────────────
+
+function buildUrl(viewPath: string): string {
+  if (typeof window === "undefined") return viewPath;
+  const url = new URL(window.location.href);
+  url.pathname = viewPath;
+  // Preserve project param
+  return url.pathname + url.search;
+}
+
 function getInitialView(): ViewId {
   if (typeof window === "undefined") return "workspace";
   const path = window.location.pathname;
@@ -55,11 +65,11 @@ export function ViewProvider({ children }: { children: ReactNode }) {
   const [view, setViewState] = useState<ViewId>(getInitialView);
   const [viewHistory, setViewHistory] = useState<ViewId[]>([]);
 
-  // Sync URL bar without triggering Next.js routing
+  // Sync URL bar — preserve query params
   useEffect(() => {
     const targetPath = VIEW_PATHS[view] || "/workspace";
     if (window.location.pathname !== targetPath) {
-      window.history.replaceState(null, "", targetPath);
+      window.history.replaceState(null, "", buildUrl(targetPath));
     }
   }, [view]);
 
@@ -77,9 +87,8 @@ export function ViewProvider({ children }: { children: ReactNode }) {
     (next: ViewId) => {
       setViewHistory((h) => [...h.slice(-20), view]);
       setViewState(next);
-      // Push to history so back button works
       const targetPath = VIEW_PATHS[next] || "/workspace";
-      window.history.pushState(null, "", targetPath);
+      window.history.pushState(null, "", buildUrl(targetPath));
     },
     [view]
   );
@@ -89,7 +98,7 @@ export function ViewProvider({ children }: { children: ReactNode }) {
       const prev = h[h.length - 1];
       if (prev) {
         setViewState(prev);
-        window.history.replaceState(null, "", VIEW_PATHS[prev]);
+        window.history.replaceState(null, "", buildUrl(VIEW_PATHS[prev]));
         return h.slice(0, -1);
       }
       return h;
