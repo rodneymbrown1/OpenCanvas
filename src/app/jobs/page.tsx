@@ -35,7 +35,7 @@ export default function JobsPage() {
 
   const fetchSessions = useCallback(async () => {
     try {
-      const res = await fetch("http://localhost:3001/sessions");
+      const res = await fetch("/api/sessions");
       if (res.ok) {
         const data = await res.json();
         setSessions(data.sessions || []);

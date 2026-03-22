@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 
 export default function WorkspacePage() {
-  const { session, setAgent, setWorkDir, connect } = useSession();
+  const { session, autoReconnecting, setAgent, setWorkDir, connect, disconnect } = useSession();
   const { agent, workDir, agentConnected, sessionId } = session;
 
   const [showExplorer, setShowExplorer] = useState(true);
@@ -245,6 +245,7 @@ export default function WorkspacePage() {
                     cwd={workDir}
                     sessionId={sessionId !== "pending" ? sessionId : undefined}
                     onSessionCreated={handleSessionCreated}
+                    onReconnectFailed={disconnect}
                   />
                 ) : (
                   <div className="flex flex-col h-full bg-[var(--bg-primary)]">
@@ -257,7 +258,9 @@ export default function WorkspacePage() {
                         }}
                         className="flex items-center gap-1.5 px-2 py-0.5 rounded text-xs text-[var(--text-muted)] hover:text-[var(--accent)] hover:bg-[var(--bg-tertiary)] transition-colors"
                       >
-                        {ptyStarting ? (
+                        {autoReconnecting ? (
+                          <><Loader2 size={12} className="animate-spin" />reconnecting...</>
+                        ) : ptyStarting ? (
                           <><Loader2 size={12} className="animate-spin" />starting PTY server...</>
                         ) : !ptyReady ? (
                           <><span className="w-2 h-2 rounded-full bg-[var(--error)]" />PTY offline — click to start</>
@@ -272,7 +275,7 @@ export default function WorkspacePage() {
                         disabled={!ptyReady}
                         className={`text-sm transition-colors ${ptyReady ? "text-[var(--text-muted)] hover:text-[var(--accent)]" : "text-[var(--text-muted)] opacity-50"}`}
                       >
-                        {!workDir ? "Select a folder first, then connect your agent" : !ptyReady ? "Waiting for PTY server..." : `Click to connect ${agent}`}
+                        {autoReconnecting ? "Reconnecting to previous session..." : !workDir ? "Select a folder first, then connect your agent" : !ptyReady ? "Waiting for PTY server..." : `Click to connect ${agent}`}
                       </button>
                     </div>
                   </div>

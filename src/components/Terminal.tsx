@@ -12,6 +12,7 @@ interface TerminalProps {
   ptyPort?: number;
   sessionId?: string | null;
   onSessionCreated?: (sessionId: string) => void;
+  onReconnectFailed?: () => void;
 }
 
 export function AgentTerminal({
@@ -20,6 +21,7 @@ export function AgentTerminal({
   ptyPort = 3001,
   sessionId,
   onSessionCreated,
+  onReconnectFailed,
 }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerminal | null>(null);
@@ -114,6 +116,10 @@ export function AgentTerminal({
         case "error":
           console.error("[Terminal] Error from server:", msg.message);
           term.writeln(`\x1b[31m[Open Canvas]\x1b[0m ${msg.message}`);
+          // If we were trying to reconnect and it failed, notify parent
+          if (sessionId) {
+            onReconnectFailed?.();
+          }
           break;
       }
     };
@@ -154,7 +160,7 @@ export function AgentTerminal({
     return () => {
       resizeObserver.disconnect();
     };
-  }, [agent, cwd, ptyPort, sessionId, onSessionCreated]);
+  }, [agent, cwd, ptyPort, sessionId, onSessionCreated, onReconnectFailed]);
 
   useEffect(() => {
     mountedRef.current = true;

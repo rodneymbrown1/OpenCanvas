@@ -20,6 +20,13 @@ export interface McpServer {
   args: string[];
 }
 
+export interface SessionConfig {
+  lastSessionId: string | null;
+  lastAgent: string;
+  lastWorkDir: string;
+  connectedAt: string | null;
+}
+
 export interface OpenCanvasConfig {
   workspace: { root: string };
   agent: {
@@ -40,6 +47,7 @@ export interface OpenCanvasConfig {
     default_stack: string;
     theme: string;
   };
+  session?: SessionConfig;
 }
 
 const CONFIG_PATH = path.join(process.cwd(), "open-canvas.yaml");
