@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   ChevronRight,
   ChevronDown,
@@ -13,6 +13,7 @@ import {
   Trash2,
   Eye,
   ExternalLink,
+  ChevronsDownUp,
 } from "lucide-react";
 
 interface FileEntry {
@@ -38,14 +39,21 @@ function FileTreeNode({
   selectedPath,
   onSelect,
   onContextMenu,
+  collapseKey,
 }: {
   entry: FileEntry;
   depth: number;
   selectedPath: string | null;
   onSelect: (path: string) => void;
   onContextMenu: (e: React.MouseEvent, entry: FileEntry) => void;
+  collapseKey: number;
 }) {
   const [expanded, setExpanded] = useState(depth < 1);
+
+  // Collapse when collapseKey changes
+  useEffect(() => {
+    if (collapseKey > 0) setExpanded(false);
+  }, [collapseKey]);
   const isDir = entry.type === "directory";
   const isSelected = entry.path === selectedPath;
 
@@ -106,6 +114,7 @@ function FileTreeNode({
               selectedPath={selectedPath}
               onSelect={onSelect}
               onContextMenu={onContextMenu}
+              collapseKey={collapseKey}
             />
           ))}
         </div>
@@ -122,6 +131,7 @@ export function FileExplorer({ onFilePreview }: FileExplorerProps) {
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
   const [creating, setCreating] = useState<"file" | "folder" | null>(null);
   const [newName, setNewName] = useState("");
+  const [collapseKey, setCollapseKey] = useState(0);
 
   const fetchTree = useCallback(async () => {
     setLoading(true);
@@ -233,6 +243,13 @@ export function FileExplorer({ onFilePreview }: FileExplorerProps) {
             </button>
           )}
           <button
+            onClick={() => setCollapseKey((k) => k + 1)}
+            className="w-5 h-5 rounded flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] transition-colors"
+            title="Collapse All"
+          >
+            <ChevronsDownUp size={13} />
+          </button>
+          <button
             onClick={fetchTree}
             className="w-5 h-5 rounded flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] transition-colors"
             title="Refresh"
@@ -309,6 +326,7 @@ export function FileExplorer({ onFilePreview }: FileExplorerProps) {
               selectedPath={selectedPath}
               onSelect={setSelectedPath}
               onContextMenu={handleContextMenu}
+              collapseKey={collapseKey}
             />
           ))
         )}

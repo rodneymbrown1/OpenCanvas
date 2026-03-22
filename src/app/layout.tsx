@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { Sidebar } from "@/components/Sidebar";
+import { SessionProvider } from "@/lib/SessionContext";
 
 export const metadata: Metadata = {
   title: "Open Canvas",
@@ -15,8 +16,10 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <body className="flex h-screen overflow-hidden">
-        <Sidebar />
-        <main className="flex-1 overflow-auto">{children}</main>
+        <SessionProvider>
+          <Sidebar />
+          <main className="flex-1 overflow-auto">{children}</main>
+        </SessionProvider>
       </body>
     </html>
   );

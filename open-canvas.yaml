@@ -1,5 +1,5 @@
 workspace:
-  root: /Users/rodneymbrown/Software/picasso-imports/Court of Appeals
+  root: /Users/rodneymbrown/Software/picasso-imports
 agent:
   active: claude
   claude:

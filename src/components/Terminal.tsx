@@ -10,28 +10,30 @@ interface TerminalProps {
   agent: "claude" | "codex" | "gemini" | "shell";
   cwd: string;
   ptyPort?: number;
+  sessionId?: string | null;
+  onSessionCreated?: (sessionId: string) => void;
 }
 
 export function AgentTerminal({
   agent,
   cwd,
   ptyPort = 3001,
+  sessionId,
+  onSessionCreated,
 }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerminal | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const [connected, setConnected] = useState(false);
+  const mountedRef = useRef(true);
 
   const connect = useCallback(() => {
     if (!containerRef.current) return;
 
-    // Clean up previous
+    // Clean up previous terminal UI only (not the WS — it may be reused)
     if (termRef.current) {
       termRef.current.dispose();
-    }
-    if (wsRef.current) {
-      wsRef.current.close();
     }
 
     const term = new XTerminal({
@@ -57,32 +59,50 @@ export function AgentTerminal({
     termRef.current = term;
     fitRef.current = fitAddon;
 
-    // Connect WebSocket
+    // Close previous WebSocket if exists
+    if (wsRef.current) {
+      wsRef.current.close();
+    }
+
     console.log(`[Terminal] Connecting to ws://localhost:${ptyPort}...`);
-    const wsUrl = `ws://localhost:${ptyPort}`;
-    const ws = new WebSocket(wsUrl);
+    const ws = new WebSocket(`ws://localhost:${ptyPort}`);
     wsRef.current = ws;
 
     ws.onopen = () => {
-      console.log(`[Terminal] WebSocket connected, spawning ${agent} in ${cwd}`);
+      if (!mountedRef.current) return;
       setConnected(true);
-      term.writeln(`\x1b[36m[Open Canvas]\x1b[0m Connecting to ${agent}...`);
-      const spawnMsg = {
-        type: "spawn",
-        agent,
-        cwd,
-        cols: term.cols,
-        rows: term.rows,
-      };
-      console.log("[Terminal] Sending spawn:", spawnMsg);
-      ws.send(JSON.stringify(spawnMsg));
+
+      if (sessionId) {
+        // Reconnect to existing session
+        console.log(`[Terminal] Reconnecting to session ${sessionId}`);
+        term.writeln(`\x1b[36m[Open Canvas]\x1b[0m Reconnecting to ${agent}...`);
+        ws.send(JSON.stringify({ type: "reconnect", sessionId }));
+      } else {
+        // Start new session
+        console.log(`[Terminal] Spawning new ${agent} session`);
+        term.writeln(`\x1b[36m[Open Canvas]\x1b[0m Connecting to ${agent}...`);
+        ws.send(
+          JSON.stringify({
+            type: "spawn",
+            agent,
+            cwd,
+            cols: term.cols,
+            rows: term.rows,
+          })
+        );
+      }
     };
 
     ws.onmessage = (event) => {
+      if (!mountedRef.current) return;
       const msg = JSON.parse(event.data);
       switch (msg.type) {
         case "output":
           term.write(msg.data);
+          break;
+        case "session":
+          console.log(`[Terminal] Session created:`, msg.session.id);
+          onSessionCreated?.(msg.session.id);
           break;
         case "exit":
           console.log(`[Terminal] Agent exited with code ${msg.code}`);
@@ -99,29 +119,24 @@ export function AgentTerminal({
     };
 
     ws.onclose = (event) => {
-      console.log(`[Terminal] WebSocket closed: code=${event.code} reason=${event.reason}`);
+      if (!mountedRef.current) return;
+      console.log(`[Terminal] WebSocket closed: code=${event.code}`);
       setConnected(false);
-      term.writeln("\x1b[33m[Open Canvas]\x1b[0m Disconnected from PTY server");
     };
 
-    ws.onerror = (event) => {
-      console.error("[Terminal] WebSocket error:", event);
+    ws.onerror = () => {
+      if (!mountedRef.current) return;
       term.writeln(
         "\x1b[31m[Open Canvas]\x1b[0m Cannot connect to PTY server."
       );
-      term.writeln(
-        "\x1b[90mThe PTY server should auto-start. Check the PTY status indicator.\x1b[0m"
-      );
     };
 
-    // Send input to PTY
     term.onData((data) => {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "input", data }));
       }
     });
 
-    // Handle resize
     const resizeObserver = new ResizeObserver(() => {
       fitAddon.fit();
       if (ws.readyState === WebSocket.OPEN) {
@@ -139,14 +154,19 @@ export function AgentTerminal({
     return () => {
       resizeObserver.disconnect();
     };
-  }, [agent, cwd, ptyPort]);
+  }, [agent, cwd, ptyPort, sessionId, onSessionCreated]);
 
   useEffect(() => {
+    mountedRef.current = true;
     const cleanup = connect();
     return () => {
+      mountedRef.current = false;
       cleanup?.();
       termRef.current?.dispose();
-      wsRef.current?.close();
+      // Don't close the WebSocket on unmount — session stays alive on server
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.close();
+      }
     };
   }, [connect]);
 
@@ -157,9 +177,7 @@ export function AgentTerminal({
           <span className="text-xs font-medium text-[var(--text-secondary)]">
             TERMINAL
           </span>
-          <span className="text-xs text-[var(--text-muted)]">
-            {agent}
-          </span>
+          <span className="text-xs text-[var(--text-muted)]">{agent}</span>
         </div>
         <div className="flex items-center gap-2">
           <span
