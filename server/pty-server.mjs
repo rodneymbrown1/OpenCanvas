@@ -147,7 +147,7 @@ wss.on("connection", (ws) => {
 
         try {
           console.log(
-            `[pty-server] spawning ${agentName} session=${session.id} in ${cwd} (${cols}x${rows})`
+            `[pty-server] spawning: ${agentDef.shell} ${agentDef.args.join(" ")} | agent=${agentName} session=${session.id} cwd=${cwd} (${cols}x${rows})`
           );
 
           const ptyProcess = pty.spawn(agentDef.shell, agentDef.args, {
@@ -216,13 +216,17 @@ wss.on("connection", (ws) => {
             // Don't delete from activeProcesses yet — allow reconnection to see output
           });
         } catch (err) {
-          console.error(`[pty-server] spawn error:`, err);
+          console.error(`[pty-server] SPAWN FAILED for ${agentName}:`, err.message);
+          console.error(`[pty-server]   shell: ${agentDef.shell}`);
+          console.error(`[pty-server]   args: ${JSON.stringify(agentDef.args)}`);
+          console.error(`[pty-server]   cwd: ${cwd}`);
+          console.error(`[pty-server]   full error:`, err);
           session.status = "failed";
           session.endedAt = new Date().toISOString();
           ws.send(
             JSON.stringify({
               type: "error",
-              message: `Failed to start ${agentName}: ${err.message}`,
+              message: `Failed to start ${agentName}: ${err.message}. Check that '${agentName}' is installed and the working directory exists.`,
             })
           );
         }

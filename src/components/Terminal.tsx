@@ -32,11 +32,24 @@ export function AgentTerminal({
   const retriesRef = useRef(0);
   const MAX_RETRIES = 3;
   const gotOutputRef = useRef(false);
+  const gotSessionRef = useRef(false);
+
+  const log = useCallback(
+    (level: "info" | "warn" | "error", ...args: unknown[]) => {
+      const prefix = `[Terminal:${agent}]`;
+      if (level === "error") console.error(prefix, ...args);
+      else if (level === "warn") console.warn(prefix, ...args);
+      else console.log(prefix, ...args);
+    },
+    [agent]
+  );
 
   const connect = useCallback(() => {
-    if (!containerRef.current) return;
+    if (!containerRef.current) {
+      log("warn", "Container ref not ready, skipping connect");
+      return;
+    }
 
-    // Clean up previous terminal UI only (not the WS — it may be reused)
     if (termRef.current) {
       termRef.current.dispose();
     }
@@ -64,29 +77,29 @@ export function AgentTerminal({
     termRef.current = term;
     fitRef.current = fitAddon;
 
-    // Close previous WebSocket if exists
     if (wsRef.current) {
       wsRef.current.close();
     }
 
-    console.log(`[Terminal] Connecting to ws://localhost:${ptyPort}...`);
-    const ws = new WebSocket(`ws://localhost:${ptyPort}`);
+    const wsUrl = `ws://localhost:${ptyPort}`;
+    log("info", `Connecting to ${wsUrl}`, { sessionId: sessionId || "(new spawn)", cwd });
+
+    const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
     ws.onopen = () => {
       if (!mountedRef.current) return;
       setConnected(true);
       gotOutputRef.current = false;
+      gotSessionRef.current = false;
 
       if (sessionId) {
-        // Reconnect to existing session
-        console.log(`[Terminal] Reconnecting to session ${sessionId}`);
-        term.writeln(`\x1b[36m[Open Canvas]\x1b[0m Reconnecting to ${agent}...`);
+        log("info", `WS open — sending reconnect for session ${sessionId}`);
+        term.writeln(`\x1b[36m[Open Canvas]\x1b[0m Reconnecting to ${agent} (session: ${sessionId})...`);
         ws.send(JSON.stringify({ type: "reconnect", sessionId }));
       } else {
-        // Start new session
-        console.log(`[Terminal] Spawning new ${agent} session`);
-        term.writeln(`\x1b[36m[Open Canvas]\x1b[0m Connecting to ${agent}...`);
+        log("info", `WS open — sending spawn: agent=${agent} cwd=${cwd} cols=${term.cols} rows=${term.rows}`);
+        term.writeln(`\x1b[36m[Open Canvas]\x1b[0m Spawning ${agent}...`);
         ws.send(
           JSON.stringify({
             type: "spawn",
@@ -101,57 +114,105 @@ export function AgentTerminal({
 
     ws.onmessage = (event) => {
       if (!mountedRef.current) return;
-      const msg = JSON.parse(event.data);
+      let msg;
+      try {
+        msg = JSON.parse(event.data);
+      } catch (e) {
+        log("error", "Failed to parse server message:", event.data, e);
+        return;
+      }
+
       switch (msg.type) {
         case "output":
+          if (!gotOutputRef.current) {
+            log("info", "✓ First output received — agent is running");
+          }
           gotOutputRef.current = true;
           retriesRef.current = 0;
           term.write(msg.data);
           break;
+
         case "session":
-          console.log(`[Terminal] Session created:`, msg.session.id);
+          gotSessionRef.current = true;
+          log("info", `✓ Session confirmed: id=${msg.session.id} agent=${msg.session.agent} pid=${msg.session.pid} status=${msg.session.status}`);
+          term.writeln(`\x1b[36m[Open Canvas]\x1b[0m Session ${msg.session.id} (PID: ${msg.session.pid || "starting"})`);
           onSessionCreated?.(msg.session.id);
           break;
+
         case "exit":
-          console.log(`[Terminal] Agent exited with code ${msg.code}`);
+          log("warn", `Agent exited: code=${msg.code}`);
           term.writeln(
             `\x1b[33m[Open Canvas]\x1b[0m Agent exited with code ${msg.code}`
           );
           setConnected(false);
           break;
+
         case "error":
-          console.error("[Terminal] Error from server:", msg.message);
-          term.writeln(`\x1b[31m[Open Canvas]\x1b[0m ${msg.message}`);
-          // If we were trying to reconnect and it failed, notify parent
+          log("error", `Server error: ${msg.message}`);
+          term.writeln(`\x1b[31m[Open Canvas] ERROR:\x1b[0m ${msg.message}`);
           if (sessionId) {
+            log("info", "Error during reconnect — clearing stale session");
             onReconnectFailed?.();
           }
           break;
+
+        default:
+          log("warn", `Unknown message type: ${msg.type}`, msg);
       }
     };
 
     ws.onclose = (event) => {
       if (!mountedRef.current) return;
-      console.log(`[Terminal] WebSocket closed: code=${event.code}`);
+
+      const reason = event.reason || "(no reason)";
+      log("warn", `WS closed: code=${event.code} clean=${event.wasClean} reason="${reason}" gotSession=${gotSessionRef.current} gotOutput=${gotOutputRef.current}`);
+
       setConnected(false);
 
-      // If we were reconnecting to a session and never got output,
-      // the session is stale. Notify parent to clear session state.
+      // Case 1: WS closed before any server response — PTY server not running
+      if (!event.wasClean && !gotSessionRef.current && !gotOutputRef.current) {
+        term.writeln(
+          `\x1b[31m[Open Canvas]\x1b[0m Connection lost (code: ${event.code}). PTY server may not be running.`
+        );
+        term.writeln(
+          `\x1b[90mRun: npm run pty-server\x1b[0m`
+        );
+      }
+
+      // Case 2: Reconnecting to stale session
       if (sessionId && !gotOutputRef.current) {
         retriesRef.current++;
-        console.log(`[Terminal] Reconnect failed (attempt ${retriesRef.current}/${MAX_RETRIES})`);
+        log("warn", `Reconnect attempt ${retriesRef.current}/${MAX_RETRIES} failed`);
         if (retriesRef.current >= MAX_RETRIES) {
-          console.log("[Terminal] Max retries reached, clearing stale session");
+          log("error", "Max retries — clearing stale session");
+          term.writeln(
+            `\x1b[31m[Open Canvas]\x1b[0m Session ${sessionId} is no longer available.`
+          );
           onReconnectFailed?.();
           retriesRef.current = 0;
         }
       }
+
+      // Case 3: New spawn got a session but agent crashed immediately
+      if (!sessionId && gotSessionRef.current && !gotOutputRef.current) {
+        log("error", `Agent '${agent}' created a session but produced no output — it likely crashed or is not installed`);
+        term.writeln(
+          `\x1b[31m[Open Canvas]\x1b[0m Agent '${agent}' failed to start.`
+        );
+        term.writeln(
+          `\x1b[90mVerify '${agent}' is installed: which ${agent}\x1b[0m`
+        );
+      }
     };
 
-    ws.onerror = () => {
+    ws.onerror = (event) => {
       if (!mountedRef.current) return;
+      log("error", "WS error event fired", event);
       term.writeln(
-        "\x1b[31m[Open Canvas]\x1b[0m Cannot connect to PTY server."
+        `\x1b[31m[Open Canvas]\x1b[0m Cannot connect to PTY server at ws://localhost:${ptyPort}`
+      );
+      term.writeln(
+        `\x1b[90mRun: npm run pty-server\x1b[0m`
       );
     };
 
@@ -178,7 +239,7 @@ export function AgentTerminal({
     return () => {
       resizeObserver.disconnect();
     };
-  }, [agent, cwd, ptyPort, sessionId, onSessionCreated, onReconnectFailed]);
+  }, [agent, cwd, ptyPort, sessionId, onSessionCreated, onReconnectFailed, log]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -187,7 +248,6 @@ export function AgentTerminal({
       mountedRef.current = false;
       cleanup?.();
       termRef.current?.dispose();
-      // Don't close the WebSocket on unmount — session stays alive on server
       if (wsRef.current?.readyState === WebSocket.OPEN) {
         wsRef.current.close();
       }
