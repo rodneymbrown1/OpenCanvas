@@ -13,6 +13,7 @@ const PortsView = dynamic(() => import("@/views/PortsView"), { ssr: false });
 const ProjectConfigView = dynamic(() => import("@/views/ProjectConfigView"), { ssr: false });
 const SettingsView = dynamic(() => import("@/views/SettingsView"), { ssr: false });
 const DataView = dynamic(() => import("@/views/DataView"), { ssr: false });
+const ProjectsView = dynamic(() => import("@/views/ProjectsView"), { ssr: false });
 
 function ActiveView() {
   const { view } = useView();
@@ -39,11 +40,7 @@ function ActiveView() {
         </div>
       );
     case "projects":
-      return (
-        <div className="flex items-center justify-center h-full text-[var(--text-muted)]">
-          Project Manager — coming soon
-        </div>
-      );
+      return <ProjectsView />;
     default:
       return <WorkspaceView />;
   }
