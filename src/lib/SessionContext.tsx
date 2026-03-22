@@ -135,7 +135,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           clearPersistedSession();
         }
       } catch {
-        // PTY server not reachable — don't clear, user might start it later
+        // PTY server not reachable — clear stale session to prevent reconnect loops
+        if (!cancelled) {
+          clearPersistedSession();
+        }
       }
 
       setAutoReconnecting(false);

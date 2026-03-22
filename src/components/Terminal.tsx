@@ -29,6 +29,9 @@ export function AgentTerminal({
   const fitRef = useRef<FitAddon | null>(null);
   const [connected, setConnected] = useState(false);
   const mountedRef = useRef(true);
+  const retriesRef = useRef(0);
+  const MAX_RETRIES = 3;
+  const gotOutputRef = useRef(false);
 
   const connect = useCallback(() => {
     if (!containerRef.current) return;
@@ -73,6 +76,7 @@ export function AgentTerminal({
     ws.onopen = () => {
       if (!mountedRef.current) return;
       setConnected(true);
+      gotOutputRef.current = false;
 
       if (sessionId) {
         // Reconnect to existing session
@@ -100,6 +104,8 @@ export function AgentTerminal({
       const msg = JSON.parse(event.data);
       switch (msg.type) {
         case "output":
+          gotOutputRef.current = true;
+          retriesRef.current = 0;
           term.write(msg.data);
           break;
         case "session":
@@ -128,6 +134,18 @@ export function AgentTerminal({
       if (!mountedRef.current) return;
       console.log(`[Terminal] WebSocket closed: code=${event.code}`);
       setConnected(false);
+
+      // If we were reconnecting to a session and never got output,
+      // the session is stale. Notify parent to clear session state.
+      if (sessionId && !gotOutputRef.current) {
+        retriesRef.current++;
+        console.log(`[Terminal] Reconnect failed (attempt ${retriesRef.current}/${MAX_RETRIES})`);
+        if (retriesRef.current >= MAX_RETRIES) {
+          console.log("[Terminal] Max retries reached, clearing stale session");
+          onReconnectFailed?.();
+          retriesRef.current = 0;
+        }
+      }
     };
 
     ws.onerror = () => {
