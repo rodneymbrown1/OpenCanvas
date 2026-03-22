@@ -18,51 +18,23 @@ import {
   X,
   Play,
   Loader2,
+  Square,
 } from "lucide-react";
 
-function RunAppButton({ sessionId }: { sessionId: string }) {
-  const { state: project } = useProject();
-  const [sending, setSending] = useState(false);
-  const [waiting, setWaiting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+function AppControls() {
+  const { state: project, startApp, stopApp } = useProject();
 
-  // When app port detected, stop waiting
-  useEffect(() => {
-    if (project.appPort && waiting) {
-      setWaiting(false);
-    }
-  }, [project.appPort, waiting]);
-
-  const handleRun = async () => {
-    setSending(true);
-    setError(null);
-    try {
-      const res = await fetch(`/api/sessions/${sessionId}/input`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ command: "npm run dev" }),
-      });
-      if (res.ok) {
-        setWaiting(true);
-      } else {
-        const data = await res.json().catch(() => ({}));
-        setError(data.error || "Failed to send command");
-      }
-    } catch {
-      setError("Cannot reach agent session");
-    } finally {
-      setSending(false);
-    }
-  };
-
-  if (waiting) {
+  if (project.appStatus === "building" || project.appStatus === "initializing") {
     return (
       <div className="space-y-3 max-w-md">
         <div className="flex items-center justify-center gap-2 text-xs text-[var(--accent)]">
           <Loader2 size={14} className="animate-spin" />
-          <span>Starting app...</span>
+          <span>
+            {project.appStatus === "initializing"
+              ? "Asking agent to start the dev server..."
+              : "Starting app..."}
+          </span>
         </div>
-        {/* Show startup log from terminal output */}
         {project.startupLog.length > 0 && (
           <div className="bg-[var(--bg-secondary)] rounded-lg border border-[var(--border)] p-3 text-left">
             <pre className="text-[10px] leading-relaxed text-[var(--text-muted)] font-mono whitespace-pre-wrap max-h-32 overflow-y-auto">
@@ -70,31 +42,53 @@ function RunAppButton({ sessionId }: { sessionId: string }) {
             </pre>
           </div>
         )}
+        <button
+          onClick={stopApp}
+          className="text-xs text-[var(--text-muted)] hover:text-[var(--error)] transition-colors"
+        >
+          Cancel
+        </button>
+      </div>
+    );
+  }
+
+  if (project.appStatus === "error") {
+    return (
+      <div className="space-y-3">
+        <p className="text-xs text-[var(--error)]">Failed to start app</p>
+        {project.startupLog.length > 0 && (
+          <div className="bg-[var(--bg-secondary)] rounded-lg border border-[var(--border)] p-3 text-left max-w-md">
+            <pre className="text-[10px] leading-relaxed text-[var(--text-muted)] font-mono whitespace-pre-wrap max-h-32 overflow-y-auto">
+              {project.startupLog.slice(-10).join("\n")}
+            </pre>
+          </div>
+        )}
+        <button
+          onClick={startApp}
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-medium hover:opacity-90 transition-opacity"
+        >
+          <Play size={14} />
+          Retry
+        </button>
       </div>
     );
   }
 
   return (
-    <div className="space-y-2">
-      <button
-        onClick={handleRun}
-        disabled={sending}
-        className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
-      >
-        <Play size={14} />
-        {sending ? "Sending..." : "Run App"}
-      </button>
-      {error && (
-        <p className="text-xs text-[var(--error)]">{error}</p>
-      )}
-    </div>
+    <button
+      onClick={startApp}
+      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-medium hover:opacity-90 transition-opacity"
+    >
+      <Play size={14} />
+      Run App
+    </button>
   );
 }
 
 export default function WorkspaceView() {
   const { session, setAgent, setWorkDir } = useSession();
   const { agent, workDir } = session;
-  const { state: project, refreshAppPreview, clearAppPort } = useProject();
+  const { state: project, refreshAppPreview, clearAppPort, stopApp } = useProject();
 
   const [showExplorer, setShowExplorer] = useState(true);
   const [explorerWidth, setExplorerWidth] = useState(224);
@@ -244,11 +238,11 @@ export default function WorkspaceView() {
                     <ExternalLink size={12} />
                   </a>
                   <button
-                    onClick={clearAppPort}
-                    className="w-6 h-6 rounded flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] transition-colors"
-                    title="Close preview"
+                    onClick={stopApp}
+                    className="w-6 h-6 rounded flex items-center justify-center text-[var(--text-muted)] hover:text-red-400 hover:bg-[var(--bg-tertiary)] transition-colors"
+                    title="Stop app"
                   >
-                    <X size={12} />
+                    <Square size={10} />
                   </button>
                 </div>
               </div>
@@ -267,8 +261,8 @@ export default function WorkspaceView() {
                 <p className="text-sm text-[var(--text-muted)]">
                   Your app preview will appear here.
                 </p>
-                {session.agentConnected && session.sessionId && session.sessionId !== "pending" ? (
-                  <RunAppButton sessionId={session.sessionId} />
+                {session.agentConnected ? (
+                  <AppControls />
                 ) : (
                   <p className="text-xs text-[var(--text-muted)]">
                     Connect an agent to get started.

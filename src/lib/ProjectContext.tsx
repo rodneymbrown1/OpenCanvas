@@ -37,6 +37,7 @@ interface ProjectState {
   // App preview
   appPort: number | null;
   appStatus: AppStatus;
+  stackSessionId: string | null;
   detectedPorts: PortInfo[];
   startupLog: string[];
   iframeKey: number;
@@ -44,6 +45,8 @@ interface ProjectState {
 
 interface ProjectContextType {
   state: ProjectState;
+  startApp: () => Promise<void>;
+  stopApp: () => Promise<void>;
   refreshAppPreview: () => void;
   clearAppPort: () => void;
   setAppPort: (port: number | null) => void;
@@ -64,6 +67,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     dataFiles: [],
     appPort: null,
     appStatus: "idle",
+    stackSessionId: null,
     detectedPorts: [],
     startupLog: [],
     iframeKey: 0,
@@ -75,48 +79,57 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   // Debounce: port must appear in 2 consecutive polls
   const candidatePortRef = useRef<number | null>(null);
 
-  // ── Session-based port detection (fast — from PTY output parsing) ───────
+  // ── Stack session polling (checks dedicated stack session for port + log) ─
 
   useEffect(() => {
-    if (!session.sessionId || session.sessionId === "pending" || !session.agentConnected) return;
+    if (!session.workDir) return;
     let cancelled = false;
 
-    async function pollSession() {
+    async function pollStack() {
       try {
-        const res = await fetch(`/api/sessions/${session.sessionId}`);
+        const res = await fetch(`/api/stack?cwd=${encodeURIComponent(session.workDir)}`);
         if (!res.ok || cancelled) return;
         const data = await res.json();
-        const s = data.session;
-        if (!s || cancelled) return;
 
-        setState((prev) => {
-          // If session detected a port and we don't have one yet, use it immediately
-          if (s.detectedPort && !prev.appPort) {
-            return {
-              ...prev,
-              appPort: s.detectedPort,
-              appStatus: "running",
-              startupLog: s.lastOutput || [],
+        if (data.running && data.session) {
+          const s = data.session;
+          setState((prev) => {
+            const updates: Partial<ProjectState> = {
+              stackSessionId: s.id,
+              startupLog: s.lastOutput || prev.startupLog,
             };
-          }
-          // Always update startup log
-          if (s.lastOutput?.length > 0) {
-            return { ...prev, startupLog: s.lastOutput };
-          }
-          return prev;
-        });
+
+            if (s.detectedPort && !prev.appPort) {
+              updates.appPort = s.detectedPort;
+              updates.appStatus = "running";
+            }
+
+            if (!s.detectedPort && !prev.appPort && prev.appStatus !== "building") {
+              updates.appStatus = "building";
+            }
+
+            return { ...prev, ...updates };
+          });
+        } else {
+          setState((prev) => {
+            if (prev.stackSessionId) {
+              return { ...prev, stackSessionId: null };
+            }
+            return prev;
+          });
+        }
       } catch {
         // ignore
       }
     }
 
-    pollSession();
-    const interval = setInterval(pollSession, 2000);
+    pollStack();
+    const interval = setInterval(pollStack, 2000);
     return () => {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [session.sessionId, session.agentConnected]);
+  }, [session.workDir]);
 
   // ── Port auto-detection polling (fallback — from lsof scan) ─────────────
 
@@ -211,6 +224,52 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
 
   // ── Actions ─────────────────────────────────────────────────────────────
 
+  const startApp = useCallback(async () => {
+    if (!session.workDir || !session.agent) return;
+    setState((prev) => ({ ...prev, appStatus: "initializing", startupLog: [] }));
+    try {
+      const res = await fetch("/api/stack?action=start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agent: session.agent, cwd: session.workDir }),
+      });
+      const data = await res.json();
+      if (data.session) {
+        setState((prev) => ({
+          ...prev,
+          stackSessionId: data.session.id,
+          appStatus: data.alreadyRunning ? "running" : "building",
+          appPort: data.session.detectedPort || prev.appPort,
+        }));
+      } else {
+        setState((prev) => ({ ...prev, appStatus: "error" }));
+      }
+    } catch {
+      setState((prev) => ({ ...prev, appStatus: "error" }));
+    }
+  }, [session.workDir, session.agent]);
+
+  const stopApp = useCallback(async () => {
+    if (!session.workDir) return;
+    try {
+      await fetch("/api/stack?action=stop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cwd: session.workDir }),
+      });
+    } catch {
+      // ignore
+    }
+    setState((prev) => ({
+      ...prev,
+      appPort: null,
+      appStatus: "idle",
+      stackSessionId: null,
+      startupLog: [],
+    }));
+    candidatePortRef.current = null;
+  }, [session.workDir]);
+
   const refreshAppPreview = useCallback(() => {
     setState((prev) => ({ ...prev, iframeKey: prev.iframeKey + 1 }));
   }, []);
@@ -230,7 +289,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
 
   return (
     <ProjectContext.Provider
-      value={{ state, refreshAppPreview, clearAppPort, setAppPort }}
+      value={{ state, startApp, stopApp, refreshAppPreview, clearAppPort, setAppPort }}
     >
       {children}
     </ProjectContext.Provider>

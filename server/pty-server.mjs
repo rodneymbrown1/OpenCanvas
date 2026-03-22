@@ -104,6 +104,169 @@ const httpServer = http.createServer((req, res) => {
     return;
   }
 
+  // POST /stack/start — spawn a dedicated agent session to start the project's dev stack
+  if (req.url === "/stack/start" && req.method === "POST") {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      try {
+        const { agent, cwd } = JSON.parse(body);
+        if (!agent || !cwd) {
+          res.writeHead(400);
+          res.end(JSON.stringify({ error: "agent and cwd required" }));
+          return;
+        }
+
+        // Check if there's already a stack session running for this cwd
+        for (const [, s] of sessions) {
+          if (s.cwd === cwd && s.role === "stack" && s.status === "running") {
+            res.end(JSON.stringify({ session: s, alreadyRunning: true }));
+            return;
+          }
+        }
+
+        const session = createSession(agent, cwd);
+        session.role = "stack";
+
+        // Use the coding agent CLI in prompt mode to start the stack
+        const agentCmd = AGENT_COMMANDS[agent];
+        if (!agentCmd) {
+          res.writeHead(400);
+          res.end(JSON.stringify({ error: `Unknown agent: ${agent}` }));
+          return;
+        }
+
+        // Spawn the agent with a prompt to start the dev server
+        const prompt = `Look at this project directory and start the development server. Determine the correct command by checking package.json scripts, Makefile, or other config files. Common commands: npm run dev, npm start, yarn dev, python manage.py runserver, cargo run, go run main.go. Run the appropriate command. Do not ask questions — just start the server.`;
+
+        const shell = agentCmd.shell;
+        const args = ["-l", "-c", `${agent} -p "${prompt}"`];
+
+        console.log(`[pty-server] starting stack session: ${agent} in ${cwd}`);
+
+        const ptyProcess = pty.spawn(shell, args, {
+          name: "xterm-256color",
+          cols: 120,
+          rows: 30,
+          cwd,
+          env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" },
+        });
+
+        session.pid = ptyProcess.pid;
+        session.status = "running";
+
+        activeProcesses.set(session.id, {
+          ptyProcess,
+          clients: new Set(),
+          outputBuffer: [],
+        });
+
+        ptyProcess.onData((data) => {
+          session.outputBytes += Buffer.byteLength(data);
+          session.outputLines += (data.match(/\n/g) || []).length;
+
+          const clean = stripAnsi(data);
+          const lines = clean.split("\n").filter((l) => l.trim());
+          for (const line of lines) {
+            session.lastOutput.push(line.trim());
+            if (session.lastOutput.length > 30) session.lastOutput.shift();
+            if (!session.detectedPort) {
+              const portMatch = line.match(/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d{4,5})/);
+              if (portMatch) {
+                const port = parseInt(portMatch[1], 10);
+                if (port >= 3000 && port <= 9999 && port !== 3000 && port !== 3001) {
+                  session.detectedPort = port;
+                  console.log(`[pty-server] stack session=${session.id} detected port: ${port}`);
+                }
+              }
+            }
+          }
+
+          const proc = activeProcesses.get(session.id);
+          if (proc) {
+            proc.outputBuffer.push(data);
+            if (proc.outputBuffer.length > 200) proc.outputBuffer.shift();
+            for (const client of proc.clients) {
+              if (client.readyState === client.OPEN) {
+                client.send(JSON.stringify({ type: "output", data }));
+              }
+            }
+          }
+        });
+
+        ptyProcess.onExit(({ exitCode }) => {
+          console.log(`[pty-server] stack session=${session.id} exited: code=${exitCode}`);
+          session.status = "completed";
+          session.exitCode = exitCode;
+          session.endedAt = new Date().toISOString();
+        });
+
+        console.log(`[pty-server] stack session spawned: id=${session.id} pid=${ptyProcess.pid}`);
+        res.end(JSON.stringify({ session }));
+      } catch (err) {
+        res.writeHead(500);
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // POST /stack/stop — stop the stack session for a given cwd
+  if (req.url === "/stack/stop" && req.method === "POST") {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      try {
+        const { cwd } = JSON.parse(body);
+
+        // Find the running stack session for this cwd
+        let found = null;
+        for (const [id, s] of sessions) {
+          if (s.cwd === cwd && s.role === "stack" && s.status === "running") {
+            found = { id, session: s };
+            break;
+          }
+        }
+
+        if (!found) {
+          res.writeHead(404);
+          res.end(JSON.stringify({ error: "No running stack session for this directory" }));
+          return;
+        }
+
+        const proc = activeProcesses.get(found.id);
+        if (proc?.ptyProcess) {
+          console.log(`[pty-server] stopping stack session=${found.id} pid=${found.session.pid}`);
+          proc.ptyProcess.kill();
+          found.session.status = "completed";
+          found.session.endedAt = new Date().toISOString();
+        }
+
+        res.end(JSON.stringify({ stopped: true, sessionId: found.id }));
+      } catch (err) {
+        res.writeHead(500);
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // GET /stack/status?cwd=... — check if stack is running for a directory
+  if (req.url?.startsWith("/stack/status") && req.method === "GET") {
+    const url = new URL(req.url, `http://localhost:${PORT}`);
+    const cwd = url.searchParams.get("cwd");
+
+    for (const [, s] of sessions) {
+      if (s.cwd === cwd && s.role === "stack" && s.status === "running") {
+        res.end(JSON.stringify({ running: true, session: s }));
+        return;
+      }
+    }
+
+    res.end(JSON.stringify({ running: false }));
+    return;
+  }
+
   // POST /sessions/:id/input — send input to a running session
   const inputMatch = req.url?.match(/^\/sessions\/(.+)\/input$/);
   if (inputMatch && req.method === "POST") {
