@@ -5,25 +5,29 @@ import { FileExplorer } from "@/components/FileExplorer";
 import { AgentSelector } from "@/components/AgentSelector";
 import { FilePreviewModal } from "@/components/FilePreviewModal";
 import { FolderPickerModal } from "@/components/FolderPickerModal";
+import { ProjectStatusBar } from "@/components/ProjectStatusBar";
 import { useSession } from "@/lib/SessionContext";
+import { useProject } from "@/lib/ProjectContext";
 import Image from "next/image";
 import {
   PanelLeftClose,
   PanelLeftOpen,
   FolderOpen,
-  GripVertical,
+  RefreshCw,
+  ExternalLink,
+  X,
 } from "lucide-react";
 
 export default function WorkspaceView() {
   const { session, setAgent, setWorkDir } = useSession();
-  const { agent, workDir, agentConnected } = session;
+  const { agent, workDir } = session;
+  const { state: project, refreshAppPreview, clearAppPort, setAppPort } = useProject();
 
   const [showExplorer, setShowExplorer] = useState(true);
   const [explorerWidth, setExplorerWidth] = useState(224);
   const [draggingExplorer, setDraggingExplorer] = useState(false);
   const [previewFile, setPreviewFile] = useState<string | null>(null);
   const [showFolderPicker, setShowFolderPicker] = useState(false);
-  const [appPort, setAppPort] = useState<number | null>(null);
 
   // Load config on mount
   useEffect(() => {
@@ -105,6 +109,9 @@ export default function WorkspaceView() {
         </div>
       </div>
 
+      {/* Project status bar */}
+      <ProjectStatusBar />
+
       {/* Main content */}
       <div className="flex flex-1 min-h-0">
         {/* File explorer (resizable) */}
@@ -137,9 +144,49 @@ export default function WorkspaceView() {
         )}
 
         {/* App preview */}
-        <div className="flex-1 min-h-0 overflow-hidden bg-[var(--bg-primary)]">
-          {appPort ? (
-            <iframe src={`http://localhost:${appPort}`} className="w-full h-full border-0" title="App Preview" />
+        <div className="flex-1 min-h-0 overflow-hidden bg-[var(--bg-primary)] flex flex-col">
+          {project.appPort ? (
+            <>
+              {/* App preview toolbar */}
+              <div className="flex items-center justify-between px-3 py-1 bg-[var(--bg-secondary)] border-b border-[var(--border)] shrink-0">
+                <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
+                  <span className="w-2 h-2 rounded-full bg-[var(--success)]" />
+                  <span>localhost:{project.appPort}</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={refreshAppPreview}
+                    className="w-6 h-6 rounded flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] transition-colors"
+                    title="Refresh preview"
+                  >
+                    <RefreshCw size={12} />
+                  </button>
+                  <a
+                    href={`http://localhost:${project.appPort}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-6 h-6 rounded flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] transition-colors"
+                    title="Open in browser"
+                  >
+                    <ExternalLink size={12} />
+                  </a>
+                  <button
+                    onClick={clearAppPort}
+                    className="w-6 h-6 rounded flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] transition-colors"
+                    title="Close preview"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              </div>
+              {/* Iframe */}
+              <iframe
+                key={project.iframeKey}
+                src={`http://localhost:${project.appPort}`}
+                className="flex-1 border-0"
+                title="App Preview"
+              />
+            </>
           ) : (
             <div className="flex items-center justify-center h-full">
               <div className="text-center space-y-6 max-w-sm">
@@ -147,6 +194,24 @@ export default function WorkspaceView() {
                 <p className="text-sm text-[var(--text-muted)]">
                   Your app preview will appear here. Connect an agent and start building.
                 </p>
+                {project.detectedPorts.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-xs text-[var(--text-muted)]">Detected ports:</p>
+                    <div className="flex flex-wrap gap-1 justify-center">
+                      {project.detectedPorts
+                        .filter((p) => p.port >= 3000 && p.port <= 9999 && p.port !== 3000 && p.port !== 3001)
+                        .map((p) => (
+                          <button
+                            key={p.port}
+                            onClick={() => setAppPort(p.port)}
+                            className="px-2 py-0.5 rounded text-xs bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--accent)] border border-[var(--border)] transition-colors"
+                          >
+                            :{p.port}
+                          </button>
+                        ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}

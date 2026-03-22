@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { SessionProvider } from "@/lib/SessionContext";
+import { ProjectProvider } from "@/lib/ProjectContext";
 import { ViewProvider } from "@/lib/ViewContext";
 import { CanvasShell } from "@/components/CanvasShell";
 
@@ -18,10 +19,12 @@ export default function RootLayout({
     <html lang="en" className="dark">
       <body className="flex h-screen overflow-hidden">
         <SessionProvider>
-          <ViewProvider>
-            <CanvasShell />
-            {children}
-          </ViewProvider>
+          <ProjectProvider>
+            <ViewProvider>
+              <CanvasShell />
+              {children}
+            </ViewProvider>
+          </ProjectProvider>
         </SessionProvider>
       </body>
     </html>

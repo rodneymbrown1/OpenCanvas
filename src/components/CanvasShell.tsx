@@ -12,6 +12,7 @@ const UsageView = dynamic(() => import("@/views/UsageView"), { ssr: false });
 const PortsView = dynamic(() => import("@/views/PortsView"), { ssr: false });
 const ProjectConfigView = dynamic(() => import("@/views/ProjectConfigView"), { ssr: false });
 const SettingsView = dynamic(() => import("@/views/SettingsView"), { ssr: false });
+const DataView = dynamic(() => import("@/views/DataView"), { ssr: false });
 
 function ActiveView() {
   const { view } = useView();
@@ -30,11 +31,7 @@ function ActiveView() {
     case "settings":
       return <SettingsView />;
     case "data":
-      return (
-        <div className="flex items-center justify-center h-full text-[var(--text-muted)]">
-          Data Manager — coming soon
-        </div>
-      );
+      return <DataView />;
     case "appify":
       return (
         <div className="flex items-center justify-center h-full text-[var(--text-muted)]">
