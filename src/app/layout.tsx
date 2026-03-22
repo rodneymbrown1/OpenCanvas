@@ -16,7 +16,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className="dark">
+    <html lang="en" data-theme="light" suppressHydrationWarning>
       <body className="flex h-screen overflow-hidden">
         <SessionProvider>
           <ProjectProvider>
