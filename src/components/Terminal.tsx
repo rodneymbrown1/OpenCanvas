@@ -34,6 +34,13 @@ export function AgentTerminal({
   const gotOutputRef = useRef(false);
   const gotSessionRef = useRef(false);
 
+  // Store callbacks in refs to prevent useCallback dependency changes
+  // that would cause the connect effect to re-run and create loops
+  const onSessionCreatedRef = useRef(onSessionCreated);
+  onSessionCreatedRef.current = onSessionCreated;
+  const onReconnectFailedRef = useRef(onReconnectFailed);
+  onReconnectFailedRef.current = onReconnectFailed;
+
   const log = useCallback(
     (level: "info" | "warn" | "error", ...args: unknown[]) => {
       const prefix = `[Terminal:${agent}]`;
@@ -148,11 +155,11 @@ export function AgentTerminal({
               if (ws.readyState === WebSocket.OPEN) {
                 ws.close();
               }
-              onReconnectFailed?.();
+              onReconnectFailedRef.current?.();
             }, 500);
           } else {
             term.writeln(`\x1b[36m[Open Canvas]\x1b[0m Session ${s.id} (PID: ${s.pid || "starting"})`);
-            onSessionCreated?.(s.id);
+            onSessionCreatedRef.current?.(s.id);
           }
           break;
         }
@@ -170,7 +177,7 @@ export function AgentTerminal({
           term.writeln(`\x1b[31m[Open Canvas] ERROR:\x1b[0m ${msg.message}`);
           if (sessionId) {
             log("info", "Error during reconnect — clearing stale session");
-            onReconnectFailed?.();
+            onReconnectFailedRef.current?.();
           }
           break;
 
@@ -206,7 +213,7 @@ export function AgentTerminal({
           term.writeln(
             `\x1b[31m[Open Canvas]\x1b[0m Session ${sessionId} is no longer available.`
           );
-          onReconnectFailed?.();
+          onReconnectFailedRef.current?.();
           retriesRef.current = 0;
         }
       }
@@ -257,7 +264,8 @@ export function AgentTerminal({
     return () => {
       resizeObserver.disconnect();
     };
-  }, [agent, cwd, ptyPort, sessionId, onSessionCreated, onReconnectFailed, log]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agent, cwd, ptyPort, sessionId]);
 
   useEffect(() => {
     mountedRef.current = true;
