@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import fs from "fs";
+import path from "path";
 import {
   isSetUp,
   setupGlobalConfig,
@@ -61,5 +63,29 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ removed: true });
   }
 
-  return NextResponse.json({ error: "action required (setup|register|remove)" }, { status: 400 });
+  // Create new project
+  if (body.action === "create") {
+    if (!body.name) {
+      return NextResponse.json({ error: "name required" }, { status: 400 });
+    }
+    if (!isSetUp()) setupGlobalConfig();
+    const config = readGlobalConfig();
+    const slug = body.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    const projectsDir = path.join(config.open_canvas_home, "projects");
+    const projectPath = path.join(projectsDir, slug);
+
+    if (fs.existsSync(projectPath)) {
+      return NextResponse.json({ error: `Project "${slug}" already exists` }, { status: 409 });
+    }
+
+    // Create project directory with standard structure
+    fs.mkdirSync(path.join(projectPath, "data"), { recursive: true });
+    fs.mkdirSync(path.join(projectPath, "apps"), { recursive: true });
+
+    // Register in global config
+    const entry = registerProject(projectPath, body.name);
+    return NextResponse.json({ project: entry });
+  }
+
+  return NextResponse.json({ error: "action required (setup|register|remove|create)" }, { status: 400 });
 }

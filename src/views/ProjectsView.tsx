@@ -118,8 +118,9 @@ export default function ProjectsView() {
   const { setView } = useView();
   const [state, setState] = useState<GlobalState | null>(null);
   const [loading, setLoading] = useState(true);
-  const [addingPath, setAddingPath] = useState("");
-  const [showAdd, setShowAdd] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [showCreate, setShowCreate] = useState(false);
+  const [createError, setCreateError] = useState("");
 
   const fetchState = useCallback(async () => {
     try {
@@ -142,14 +143,29 @@ export default function ProjectsView() {
     fetchState();
   };
 
+  const handleCreate = async (name: string) => {
+    setCreateError("");
+    const res = await fetch("/api/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "create", name }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setCreateError(data.error || "Failed to create project");
+      return;
+    }
+    setShowCreate(false);
+    setNewName("");
+    fetchState();
+  };
+
   const handleRegister = async (projectPath: string, name?: string) => {
     await fetch("/api/projects", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "register", path: projectPath, name }),
     });
-    setShowAdd(false);
-    setAddingPath("");
     fetchState();
   };
 
@@ -218,11 +234,11 @@ export default function ProjectsView() {
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setShowAdd(!showAdd)}
+            onClick={() => { setShowCreate(!showCreate); setCreateError(""); }}
             className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs bg-[var(--accent)] text-white hover:opacity-90"
           >
             <Plus size={12} />
-            Add Project
+            New Project
           </button>
           <button
             onClick={fetchState}
@@ -234,30 +250,42 @@ export default function ProjectsView() {
       </div>
 
       <div className="flex-1 overflow-auto p-4 space-y-4">
-        {/* Add project bar */}
-        {showAdd && (
-          <div className="flex gap-2 p-3 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border)]">
-            <input
-              type="text"
-              value={addingPath}
-              onChange={(e) => setAddingPath(e.target.value)}
-              placeholder="Project path (e.g., /Users/you/my-project)"
-              autoFocus
-              className="flex-1 px-3 py-1.5 rounded-lg bg-[var(--bg-primary)] border border-[var(--border)] text-xs focus:border-[var(--accent)] focus:outline-none"
-            />
-            <button
-              onClick={() => handleRegister(addingPath)}
-              disabled={!addingPath}
-              className="px-3 py-1.5 rounded-lg bg-[var(--accent)] text-white text-xs disabled:opacity-50"
+        {/* Create project */}
+        {showCreate && (
+          <div className="p-3 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border)] space-y-2">
+            <form
+              onSubmit={(e) => { e.preventDefault(); if (newName.trim()) handleCreate(newName.trim()); }}
+              className="flex gap-2"
             >
-              Add
-            </button>
-            <button
-              onClick={() => { setShowAdd(false); setAddingPath(""); }}
-              className="px-3 py-1.5 rounded-lg text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
-            >
-              Cancel
-            </button>
+              <input
+                type="text"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder="Project name"
+                autoFocus
+                className="flex-1 px-3 py-1.5 rounded-lg bg-[var(--bg-primary)] border border-[var(--border)] text-xs focus:border-[var(--accent)] focus:outline-none"
+              />
+              <button
+                type="submit"
+                disabled={!newName.trim()}
+                className="px-3 py-1.5 rounded-lg bg-[var(--accent)] text-white text-xs disabled:opacity-50"
+              >
+                Create
+              </button>
+              <button
+                type="button"
+                onClick={() => { setShowCreate(false); setNewName(""); setCreateError(""); }}
+                className="px-3 py-1.5 rounded-lg text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+              >
+                Cancel
+              </button>
+            </form>
+            {createError && <p className="text-[11px] text-[var(--error)] px-1">{createError}</p>}
+            {state?.home && (
+              <p className="text-[10px] text-[var(--text-muted)] px-1">
+                Creates in: {state.home}/projects/{newName.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "..."}
+              </p>
+            )}
           </div>
         )}
 
