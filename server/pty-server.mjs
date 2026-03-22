@@ -82,10 +82,54 @@ function getAllSessions() {
 
 const httpServer = http.createServer((req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   res.setHeader("Content-Type", "application/json");
+
+  if (req.method === "OPTIONS") {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
 
   if (req.url === "/sessions") {
     res.end(JSON.stringify({ sessions: getAllSessions() }));
+    return;
+  }
+
+  // POST /sessions/:id/input — send input to a running session
+  const inputMatch = req.url?.match(/^\/sessions\/(.+)\/input$/);
+  if (inputMatch && req.method === "POST") {
+    const sessionId = inputMatch[1];
+    const proc = activeProcesses.get(sessionId);
+    if (!proc?.ptyProcess) {
+      res.writeHead(404);
+      res.end(JSON.stringify({ error: "Session not found or not running" }));
+      return;
+    }
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      try {
+        const { command } = JSON.parse(body);
+        if (!command) {
+          res.writeHead(400);
+          res.end(JSON.stringify({ error: "command required" }));
+          return;
+        }
+        // Write the command + newline to the PTY
+        proc.ptyProcess.write(command + "\n");
+        const session = sessions.get(sessionId);
+        if (session) {
+          session.inputBytes += Buffer.byteLength(command + "\n");
+        }
+        console.log(`[pty-server] injected command to session=${sessionId}: ${command.substring(0, 80)}`);
+        res.end(JSON.stringify({ ok: true }));
+      } catch (err) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ error: "Invalid JSON body" }));
+      }
+    });
     return;
   }
 

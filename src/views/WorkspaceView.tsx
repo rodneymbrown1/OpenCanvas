@@ -16,12 +16,61 @@ import {
   RefreshCw,
   ExternalLink,
   X,
+  Play,
+  Loader2,
 } from "lucide-react";
+
+function RunAppButton({ sessionId }: { sessionId: string }) {
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
+
+  const handleRun = async () => {
+    setSending(true);
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/input`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          command: "npm run dev",
+        }),
+      });
+      if (res.ok) {
+        setSent(true);
+      }
+    } catch (e) {
+      console.error("Failed to send run command:", e);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  if (sent) {
+    return (
+      <div className="space-y-2">
+        <div className="flex items-center justify-center gap-2 text-xs text-[var(--accent)]">
+          <Loader2 size={14} className="animate-spin" />
+          <span>Starting app... preview will appear automatically</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      onClick={handleRun}
+      disabled={sending}
+      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
+    >
+      <Play size={14} />
+      {sending ? "Starting..." : "Run App"}
+    </button>
+  );
+}
 
 export default function WorkspaceView() {
   const { session, setAgent, setWorkDir } = useSession();
   const { agent, workDir } = session;
-  const { state: project, refreshAppPreview, clearAppPort, setAppPort } = useProject();
+  const { state: project, refreshAppPreview, clearAppPort } = useProject();
 
   const [showExplorer, setShowExplorer] = useState(true);
   const [explorerWidth, setExplorerWidth] = useState(224);
@@ -192,25 +241,14 @@ export default function WorkspaceView() {
               <div className="text-center space-y-6 max-w-sm">
                 <Image src="/open_canvas_logo.png" alt="Open Canvas" width={200} height={60} className="mx-auto opacity-80" priority />
                 <p className="text-sm text-[var(--text-muted)]">
-                  Your app preview will appear here. Connect an agent and start building.
+                  Your app preview will appear here.
                 </p>
-                {project.detectedPorts.length > 0 && (
-                  <div className="space-y-2">
-                    <p className="text-xs text-[var(--text-muted)]">Detected ports:</p>
-                    <div className="flex flex-wrap gap-1 justify-center">
-                      {project.detectedPorts
-                        .filter((p) => p.port >= 3000 && p.port <= 9999 && p.port !== 3000 && p.port !== 3001)
-                        .map((p) => (
-                          <button
-                            key={p.port}
-                            onClick={() => setAppPort(p.port)}
-                            className="px-2 py-0.5 rounded text-xs bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--accent)] border border-[var(--border)] transition-colors"
-                          >
-                            :{p.port}
-                          </button>
-                        ))}
-                    </div>
-                  </div>
+                {session.agentConnected && session.sessionId && session.sessionId !== "pending" ? (
+                  <RunAppButton sessionId={session.sessionId} />
+                ) : (
+                  <p className="text-xs text-[var(--text-muted)]">
+                    Connect an agent to get started.
+                  </p>
                 )}
               </div>
             </div>
