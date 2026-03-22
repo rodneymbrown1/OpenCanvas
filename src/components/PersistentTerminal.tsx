@@ -1,14 +1,14 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { usePathname } from "next/navigation";
 import { AgentTerminal } from "@/components/Terminal";
 import { ConnectAgentModal } from "@/components/ConnectAgentModal";
 import { useSession } from "@/lib/SessionContext";
+import { useView } from "@/lib/ViewContext";
 import { GripHorizontal, Loader2 } from "lucide-react";
 
 export function PersistentTerminal() {
-  const pathname = usePathname();
+  const { view } = useView();
   const { session, autoReconnecting, connect, disconnect } = useSession();
   const { agent, workDir, agentConnected, sessionId } = session;
 
@@ -19,7 +19,7 @@ export function PersistentTerminal() {
   const [ptyReady, setPtyReady] = useState(false);
   const [ptyStarting, setPtyStarting] = useState(false);
 
-  const isWorkspace = pathname === "/workspace";
+  const isWorkspace = view === "workspace";
 
   // Check PTY server status
   const checkPtyServer = useCallback(async (): Promise<boolean> => {

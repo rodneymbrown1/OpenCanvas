@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { SessionProvider } from "@/lib/SessionContext";
-import { LayoutShell } from "@/components/LayoutShell";
+import { ViewProvider } from "@/lib/ViewContext";
+import { CanvasShell } from "@/components/CanvasShell";
 
 export const metadata: Metadata = {
   title: "Open Canvas",
@@ -17,7 +18,11 @@ export default function RootLayout({
     <html lang="en" className="dark">
       <body className="flex h-screen overflow-hidden">
         <SessionProvider>
-          <LayoutShell>{children}</LayoutShell>
+          <ViewProvider>
+            <CanvasShell />
+            {/* Hidden: Next.js still needs children rendered for API routes */}
+            <div className="hidden">{children}</div>
+          </ViewProvider>
         </SessionProvider>
       </body>
     </html>
