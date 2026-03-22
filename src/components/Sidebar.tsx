@@ -40,7 +40,7 @@ export function Sidebar() {
         title="Project Manager"
       >
         <Image
-          src="/open_canvas_logo.png"
+          src="/open_square_canvas_logo.png"
           alt="Open Canvas"
           width={32}
           height={32}
