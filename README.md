@@ -2,165 +2,93 @@
   <img src="assets/open_canvas_logo.png" alt="Open Canvas" width="400" />
 </p>
 
-<p align="center"><strong>Build apps from your data using the coding agents you already have set up.</strong></p>
+<p align="center"><strong>Build apps from your data using the coding agents you already have.</strong></p>
 
-Open Canvas is a local browser-based IDE that connects to your existing Claude Code, Codex, and Gemini accounts — no new API keys required. It wraps your terminal coding agents in a clean UI so you can focus on building instead of managing terminal sessions.
-
-If you already use Claude Code, Codex, or Gemini CLI, Open Canvas gives you a better workflow: bring in your data, point your agent at it, and build quick apps that help you day to day — all from one place.
-
----
-
-## Why Open Canvas?
-
-Solo devs using AI coding agents spend time switching between terminals, previewing apps, managing files, and checking usage. Open Canvas puts all of that in one view:
-
-- **Use your existing accounts** — Open Canvas connects to the coding agents already authenticated on your machine. No new signups, no API keys to configure (unless you want to).
-- **Switch between agents instantly** — Toggle between Claude, Codex, and Gemini with one click. Try different agents on the same project without juggling terminal windows.
-- **See what your agents are doing** — Jobs dashboard shows active tasks. Usage view shows token spend across all agents in one place.
-- **Data-first workflow** — Drop your files (spreadsheets, PDFs, docs, images), let the agent format them to markdown, then build apps straight from that data.
-- **No SaaS needed** — Everything runs on your machine. The entire premise is that you don't need a cloud service to build useful tools — you can do it locally with the resources you already have.
+<p align="center">
+  Cost to run: <strong>$0</strong>. Uses your personal Claude Code, Codex, or Gemini CLI account. Runs locally.
+</p>
 
 ---
 
-## Features
-
-### Real Agent Terminals
-Full PTY terminal sessions in the browser via xterm.js. This is the same Claude Code / Codex / Gemini experience you get in your terminal — not a simulation.
-
-### Agent Switching
-One-click switching between Claude, Codex, and Gemini. The active agent is saved to your project config so it persists across sessions.
-
-### App Preview
-The main workspace view is your app. As your agent builds, the preview updates live. File explorer and terminal are collapsible so you can go full-screen on just the app.
-
-### VS Code-Style File Explorer
-Browse your project files in a familiar tree view, synced to your OS filesystem. Right-click any file to view it in a popup without leaving your workspace.
-
-### Jobs Dashboard
-See what your coding agent is actively working on, track task history, and monitor status.
-
-### Usage Metrics
-View token usage and cost estimates across all three agent providers in a single dashboard.
-
-### Settings & Configuration
-- **Agent Settings** — Choose your active agent, set CLI or API mode, configure permissions (read, write, execute, web access)
-- **API Keys** — Optional key management for API mode
-- **MCP Servers** — Connect to external services (Telegram, Notion, Slack, etc.) via Model Context Protocol
-- **Project YAML** — Visual editor for your project config, or edit the YAML directly
-
-### CLI
-```bash
-oc init my-project   # Scaffold a new workspace
-oc start             # Launch Open Canvas in your browser
-oc format            # Convert docs to markdown (coming soon)
-```
-
----
-
-## Getting Started
-
-### Prerequisites
-- Node.js 18+
-- At least one coding agent CLI installed and authenticated:
-  - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — `npm install -g @anthropic-ai/claude-code`
-  - [Codex](https://github.com/openai/codex) — `npm install -g @openai/codex`
-  - Gemini CLI — `npm install -g @anthropic-ai/gemini`
-
-### Install & Run
+## Get Started
 
 ```bash
-git clone https://github.com/rodneymbrown1/OpenCanvas.git
-cd OpenCanvas
+git clone https://github.com/rodneymbrown1/OpenCanvas.git && cd OpenCanvas
 npm install
 npm run open-canvas
 ```
 
-This starts both the Next.js app and the PTY server, then open [http://localhost:3000](http://localhost:3000).
+Opens at [localhost:3000](http://localhost:3000). Select a folder, connect your agent, start building.
 
-### First Use
-
-1. Open Canvas loads into the workspace view
-2. Click **Select Folder** in the top bar to set your working directory
-3. Click **disconnected** in the terminal panel to connect your agent
-4. Open Canvas auto-detects which agents are installed on your system
-5. Click **Connect** — your agent terminal appears, ready to go
-6. Start building. The app preview updates as your agent works.
+Requires Node.js 18+ and at least one coding agent CLI installed (`claude`, `codex`, or `gemini`).
 
 ---
 
-## How It Works
+## What It Does
 
-Open Canvas is a Next.js app that runs locally. It spawns real PTY sessions for your coding agents using [node-pty](https://github.com/nickolasburr/node-pty) and streams them to the browser via WebSocket + xterm.js.
+Open Canvas is a local browser IDE that wraps your terminal coding agents in a workspace with live app preview, file management, and project tracking.
 
-```
-┌─────────────────────────────────────────────────┐
-│  Browser (localhost:3000)                        │
-│  ┌───────────┬─────────────────────────────────┐ │
-│  │  File     │  App Preview (iframe)           │ │
-│  │  Explorer │                                 │ │
-│  │           ├─────────────────────────────────┤ │
-│  │           │  Agent Terminal (xterm.js)      │ │
-│  └───────────┴─────────────────────────────────┘ │
-└──────────────────────┬──────────────────────────┘
-                       │ WebSocket
-              ┌────────┴────────┐
-              │  PTY Server     │
-              │  (localhost:3001)│
-              └────────┬────────┘
-                       │ node-pty
-              ┌────────┴────────┐
-              │  claude / codex │
-              │  / gemini CLI   │
-              └─────────────────┘
-```
+### Switch Between Agents
 
-Your coding agent runs as a real process on your machine using your authenticated CLI session. Open Canvas doesn't proxy, modify, or intercept your agent's communication — it just gives it a browser-based UI.
+Toggle between Claude, Codex, and Gemini with one click. Same project, different agent.
 
----
+<!-- ![Agent Switcher](assets/screenshots/agent-switcher.png) -->
 
-## Project Structure
+### Live App Preview
 
-```
-open-canvas/
-├── open-canvas.yaml           # Project config (agents, MCP, preferences)
-├── server/pty-server.mjs      # WebSocket PTY bridge
-├── cli/bin/oc.mjs             # CLI tool
-├── src/
-│   ├── app/
-│   │   ├── workspace/         # Main IDE view (preview + terminal + explorer)
-│   │   ├── jobs/              # Active jobs dashboard
-│   │   ├── usage/             # Token usage across agents
-│   │   ├── project/           # YAML config editor
-│   │   ├── settings/          # Agent config, API keys, MCP servers
-│   │   └── api/               # Backend routes
-│   ├── components/            # UI components
-│   └── lib/                   # Config reader/writer
-```
+Click **Run App** — the agent detects your stack and starts the dev server. Preview loads automatically in the workspace.
 
----
+<!-- ![App Preview](assets/screenshots/app-preview.png) -->
 
-## Who Is This For?
+### Jobs
 
-Open Canvas is for solo devs and small teams who:
+See active agent sessions, track what's running, view history.
 
-- Already use Claude Code, Codex, or Gemini and want a better workflow
-- Want to build quick internal tools from their own data without deploying to the cloud
-- Prefer a visual workspace over managing multiple terminal windows
-- Want to compare coding agents side by side on the same project
-- Need a simple way to monitor usage and costs across AI providers
+<!-- ![Jobs](assets/screenshots/jobs.png) -->
+
+### Usage & Cost
+
+Token usage and cost estimates per agent, per project. See what you're spending.
+
+<!-- ![Usage](assets/screenshots/usage.png) -->
+
+### Port Manager
+
+See which ports are in use across your projects. Kill processes directly.
+
+<!-- ![Ports](assets/screenshots/ports.png) -->
+
+### Global Shared Data
+
+Upload data once, share it across all your projects. No duplication. The agent reads a `skills.md` in your shared data directory to learn how you want your data organized and formatted.
+
+<!-- ![Data Manager](assets/screenshots/data-manager.png) -->
+
+### File Explorer with Drag & Drop
+
+VS Code-style file tree. Drag files from your desktop into any folder. Move files between directories. Right-click for context menu.
+
+### Settings
+
+- **Coding Agents** — choose active agent, CLI or API mode, permissions (read/write/execute/web)
+- **API Keys** — optional, for API mode
+- **MCP Servers** — connect external services via Model Context Protocol
+- **Project Config** — edit your project YAML directly
+
+<!-- ![Settings](assets/screenshots/settings.png) -->
+
+### Project Manager
+
+Manage multiple projects from one Open Canvas instance. Open projects in new tabs for side-by-side work. Global config at `~/.open-canvas/`.
 
 ---
 
-## Tech Stack
+## Coming Soon
 
-| Layer | Tech |
-|-------|------|
-| Frontend | Next.js, React, Tailwind CSS |
-| Terminal | xterm.js, @homebridge/node-pty-prebuilt-multiarch |
-| Real-time | WebSocket (ws) |
-| File system | chokidar (fs watcher) |
-| Config | YAML (open-canvas.yaml) |
-| Icons | Lucide React |
+- **Open Canvas Launcher** — desktop app to launch Open Canvas without the terminal
+- **Multi-terminal tabs** — multiple agent sessions per project
+- **App Builder wizard** — guided app scaffolding from your data
+- **Document formatting pipeline** — auto-convert PDFs and docs to markdown
 
 ---
 
