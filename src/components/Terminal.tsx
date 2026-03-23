@@ -15,6 +15,17 @@ interface TerminalProps {
   onReconnectFailed?: () => void;
 }
 
+function getTerminalTheme() {
+  const style = getComputedStyle(document.documentElement);
+  const get = (v: string) => style.getPropertyValue(v).trim() || undefined;
+  return {
+    background: get("--bg-primary") || "#0a0a0a",
+    foreground: get("--text-primary") || "#e5e5e5",
+    cursor: get("--accent") || "#3b82f6",
+    selectionBackground: (get("--accent") || "#3b82f6") + "44",
+  };
+}
+
 export function AgentTerminal({
   agent,
   cwd,
@@ -65,12 +76,7 @@ export function AgentTerminal({
       cursorBlink: true,
       fontSize: 13,
       fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace',
-      theme: {
-        background: "#0a0a0a",
-        foreground: "#e5e5e5",
-        cursor: "#3b82f6",
-        selectionBackground: "#3b82f644",
-      },
+      theme: getTerminalTheme(),
       allowProposedApi: true,
     });
 
@@ -279,6 +285,20 @@ export function AgentTerminal({
       }
     };
   }, [connect]);
+
+  // Update xterm theme when data-theme attribute changes
+  useEffect(() => {
+    const observer = new MutationObserver(() => {
+      if (termRef.current) {
+        termRef.current.options.theme = getTerminalTheme();
+      }
+    });
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme"],
+    });
+    return () => observer.disconnect();
+  }, []);
 
   return (
     <div className="flex flex-col h-full">
