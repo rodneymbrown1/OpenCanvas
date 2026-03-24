@@ -2,11 +2,13 @@
 
 import { useState, useEffect } from "react";
 import { X, Check, Loader2, AlertCircle, Terminal } from "lucide-react";
+import type { AgentType } from "@/lib/types/terminal";
 
-type AgentType = "claude" | "codex" | "gemini";
+/** Agent types that require the connect modal (shell connects directly) */
+type ModalAgentType = Exclude<AgentType, "shell">;
 
 interface AgentInfo {
-  id: AgentType;
+  id: ModalAgentType;
   label: string;
   installed: boolean;
   path: string | null;
@@ -14,13 +16,13 @@ interface AgentInfo {
 
 interface ConnectAgentModalProps {
   /** Pre-selected agent, or null to let user pick */
-  agent?: AgentType | null;
+  agent?: ModalAgentType | null;
   onClose: () => void;
   /** Called with the selected agent when user clicks Connect */
   onConnected: (agent: AgentType) => void;
 }
 
-const INSTALL_INSTRUCTIONS: Record<AgentType, string[]> = {
+const INSTALL_INSTRUCTIONS: Record<ModalAgentType, string[]> = {
   claude: [
     "Install Claude Code: npm install -g @anthropic-ai/claude-code",
     "Run 'claude' in your terminal to authenticate",
@@ -46,7 +48,7 @@ export function ConnectAgentModal({
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
-  const [selectedAgent, setSelectedAgent] = useState<AgentType>(initialAgent || "claude");
+  const [selectedAgent, setSelectedAgent] = useState<ModalAgentType>(initialAgent || "claude");
 
   useEffect(() => {
     fetch("/api/agents")

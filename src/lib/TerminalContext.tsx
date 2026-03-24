@@ -146,19 +146,19 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (stateWorkDirRef.current === workDir) return;
 
-    // Save current state for the project we're leaving
+    // Save current state for the project we're leaving, and atomically
+    // update the owner ref so the persist effect can't write old state
+    // under the new project's key.
     const oldDir = stateWorkDirRef.current;
     setState((currentState) => {
-      // Persist the old project's state before we switch
       if (oldDir) {
         persistState(oldDir, currentState);
         statesRef.current.set(slugify(oldDir), currentState);
       }
+      // Update ref inside callback so it's atomic with the state snapshot
+      stateWorkDirRef.current = workDir;
       return currentState;
     });
-
-    // Update the owner ref BEFORE setting new state
-    stateWorkDirRef.current = workDir;
 
     // Load state for the new project
     const slug = slugify(workDir);

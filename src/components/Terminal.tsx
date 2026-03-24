@@ -58,12 +58,12 @@ export function AgentTerminal({
 
   const log = useCallback(
     (level: "info" | "warn" | "error", ...args: unknown[]) => {
-      const prefix = `[Terminal:${agent}]`;
+      const prefix = tabId ? `[Terminal:${agent}:${tabId}]` : `[Terminal:${agent}]`;
       if (level === "error") console.error(prefix, ...args);
       else if (level === "warn") console.warn(prefix, ...args);
       else console.log(prefix, ...args);
     },
-    [agent]
+    [agent, tabId]
   );
 
   const connect = useCallback(() => {

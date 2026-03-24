@@ -22,6 +22,7 @@ export function TerminalPanel() {
     disconnectTab,
     updateTabStatus,
     setTerminalHeight,
+    reconciling,
   } = useTerminals();
   const { tabs, activeTabId, terminalHeight } = state;
 
@@ -118,6 +119,7 @@ export function TerminalPanel() {
 
   const handleModalConnected = async (agent: AgentType) => {
     setShowConnectModal(false);
+    if (!workDir) return; // Guard against workDir clearing between click and connect
     // Create the tab and immediately start connecting
     const tabId = addTab(agent);
     await ensurePtyReady();
@@ -129,8 +131,15 @@ export function TerminalPanel() {
   };
 
   // ── Auto-reconnect tabs with existing sessionIds on mount / project switch ──
+  // Wait for reconciliation to finish so we don't try to reconnect stale sessions
   const autoConnectingRef = useRef(new Set<string>());
+
+  // Clear tracking set when switching projects so new project's tabs can reconnect
   useEffect(() => {
+    autoConnectingRef.current.clear();
+  }, [workDir]);
+  useEffect(() => {
+    if (reconciling) return; // Wait for PTY session validation to complete
     for (const tab of tabs) {
       if (
         tab.sessionId &&
@@ -142,7 +151,7 @@ export function TerminalPanel() {
         updateTabStatus(tab.id, "connecting");
       }
     }
-  }, [tabs, ptyReady, updateTabStatus]);
+  }, [tabs, ptyReady, reconciling, updateTabStatus]);
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -205,11 +214,7 @@ export function TerminalPanel() {
                     <AgentTerminal
                       agent={tab.agent}
                       cwd={workDir}
-                      sessionId={
-                        tab.sessionId && tab.status !== "connecting"
-                          ? tab.sessionId
-                          : tab.sessionId || undefined
-                      }
+                      sessionId={tab.sessionId || undefined}
                       tabId={tab.id}
                       visible={isActive}
                       onSessionCreated={(sid) =>

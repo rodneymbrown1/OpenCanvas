@@ -45,6 +45,7 @@ export function Sidebar() {
           width={32}
           height={32}
           className="rounded"
+          style={{ width: "auto", height: "auto" }}
         />
       </button>
 
