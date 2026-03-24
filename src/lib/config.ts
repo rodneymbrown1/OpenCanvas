@@ -70,3 +70,51 @@ export function updateConfig(
   writeConfig(updated);
   return updated;
 }
+
+// ── Per-Project Config ────────────────────────────────────────────────────
+
+export function projectConfigPath(workDir: string): string {
+  return path.join(workDir, "open-canvas.yaml");
+}
+
+export function readProjectConfig(workDir: string): Partial<OpenCanvasConfig> {
+  const p = projectConfigPath(workDir);
+  if (!fs.existsSync(p)) return {};
+  try {
+    const raw = fs.readFileSync(p, "utf-8");
+    return (YAML.parse(raw) as Partial<OpenCanvasConfig>) || {};
+  } catch {
+    return {};
+  }
+}
+
+export function readProjectConfigRaw(workDir: string): string {
+  const p = projectConfigPath(workDir);
+  if (!fs.existsSync(p)) return "";
+  try {
+    return fs.readFileSync(p, "utf-8");
+  } catch {
+    return "";
+  }
+}
+
+export function writeProjectConfig(workDir: string, config: Partial<OpenCanvasConfig>): void {
+  const p = projectConfigPath(workDir);
+  const doc = new YAML.Document(config);
+  fs.writeFileSync(p, doc.toString(), "utf-8");
+}
+
+export function writeProjectConfigRaw(workDir: string, content: string): void {
+  const p = projectConfigPath(workDir);
+  fs.writeFileSync(p, content, "utf-8");
+}
+
+export function updateProjectConfig(
+  workDir: string,
+  updater: (config: Partial<OpenCanvasConfig>) => Partial<OpenCanvasConfig>
+): Partial<OpenCanvasConfig> {
+  const config = readProjectConfig(workDir);
+  const updated = updater(config);
+  writeProjectConfig(workDir, updated);
+  return updated;
+}

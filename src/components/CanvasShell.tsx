@@ -1,7 +1,7 @@
 "use client";
 
 import { Sidebar } from "@/components/Sidebar";
-import { PersistentTerminal } from "@/components/PersistentTerminal";
+import { TerminalPanel } from "@/components/TerminalPanel";
 import { useView } from "@/lib/ViewContext";
 import dynamic from "next/dynamic";
 
@@ -55,7 +55,7 @@ export function CanvasShell() {
         <main className={`flex-1 overflow-auto ${isWorkspace ? "min-h-0" : ""}`}>
           <ActiveView />
         </main>
-        <PersistentTerminal />
+        <TerminalPanel />
       </div>
     </>
   );

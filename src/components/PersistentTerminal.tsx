@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { AgentTerminal } from "@/components/Terminal";
 import { ConnectAgentModal } from "@/components/ConnectAgentModal";
 import { useSession } from "@/lib/SessionContext";
@@ -18,6 +18,9 @@ export function PersistentTerminal() {
   const [showConnectModal, setShowConnectModal] = useState(false);
   const [ptyReady, setPtyReady] = useState(false);
   const [ptyStarting, setPtyStarting] = useState(false);
+
+  // Track agent changes to handle switching
+  const prevAgentRef = useRef(agent);
 
   const isWorkspace = view === "workspace";
 
@@ -52,6 +55,15 @@ export function PersistentTerminal() {
       if (!running) startPtyServer();
     });
   }, [checkPtyServer, startPtyServer]);
+
+  // Handle agent switching — disconnect current session and prompt reconnection
+  useEffect(() => {
+    if (prevAgentRef.current !== agent && agentConnected) {
+      disconnect();
+      setShowConnectModal(true);
+    }
+    prevAgentRef.current = agent;
+  }, [agent, agentConnected, disconnect]);
 
   // Drag resize
   const handleMouseMove = useCallback(

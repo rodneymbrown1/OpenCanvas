@@ -7,6 +7,7 @@ interface FileEntry {
   name: string;
   path: string;
   type: "file" | "directory";
+  isSymlink?: boolean;
   children?: FileEntry[];
 }
 
@@ -32,11 +33,20 @@ function buildTree(dirPath: string, depth = 0): FileEntry[] {
       })
       .map((entry) => {
         const fullPath = path.join(dirPath, entry.name);
-        if (entry.isDirectory()) {
+        const isSymlink = entry.isSymbolicLink();
+
+        // For symlinks, check if the target is a directory
+        let isDir = entry.isDirectory();
+        if (isSymlink && !isDir) {
+          try { isDir = fs.statSync(fullPath).isDirectory(); } catch {}
+        }
+
+        if (isDir) {
           return {
             name: entry.name,
             path: fullPath,
             type: "directory" as const,
+            ...(isSymlink && { isSymlink: true }),
             children: buildTree(fullPath, depth + 1),
           };
         }
@@ -44,6 +54,7 @@ function buildTree(dirPath: string, depth = 0): FileEntry[] {
           name: entry.name,
           path: fullPath,
           type: "file" as const,
+          ...(isSymlink && { isSymlink: true }),
         };
       });
   } catch {
@@ -63,11 +74,16 @@ export async function GET(req: NextRequest) {
     );
   }
 
+  // Auto-create if the directory doesn't exist (supports global data bootstrap)
   if (!fs.existsSync(dir)) {
-    return NextResponse.json(
-      { error: "Directory does not exist" },
-      { status: 404 }
-    );
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+    } catch {
+      return NextResponse.json(
+        { error: "Directory does not exist and could not be created" },
+        { status: 404 }
+      );
+    }
   }
 
   const tree = buildTree(dir);

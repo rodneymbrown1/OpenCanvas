@@ -11,6 +11,13 @@ export interface ProjectEntry {
   description?: string;
 }
 
+export interface GlobalPermissions {
+  read: boolean;
+  write: boolean;
+  execute: boolean;
+  web: boolean;
+}
+
 export interface GlobalConfig {
   open_canvas_home: string;
   shared_data_dir: string;
@@ -18,6 +25,8 @@ export interface GlobalConfig {
     agent: string;
     theme: string;
     stack: string;
+    allowAllEdits: boolean;
+    permissions: GlobalPermissions;
   };
   projects: ProjectEntry[];
 }
@@ -38,6 +47,13 @@ const DEFAULT_GLOBAL_CONFIG: GlobalConfig = {
     agent: "claude",
     theme: "dark",
     stack: "nextjs-tailwind",
+    allowAllEdits: false,
+    permissions: {
+      read: true,
+      write: true,
+      execute: true,
+      web: false,
+    },
   },
   projects: [],
 };
@@ -179,23 +195,41 @@ export interface GlobalDataStatus {
   unformatted: string[]; // raw files with no matching formatted .md
 }
 
-function listDirFiles(dir: string, category: "raw" | "formatted" | "root"): GlobalDataFile[] {
+function listDirFiles(dir: string, category: "raw" | "formatted" | "root", baseDir?: string): GlobalDataFile[] {
   if (!fs.existsSync(dir)) return [];
+  const root = baseDir || dir;
   try {
-    return fs
-      .readdirSync(dir, { withFileTypes: true })
-      .filter((d) => d.isFile() && !d.name.startsWith("."))
-      .map((d) => {
-        const fullPath = path.join(dir, d.name);
+    const results: GlobalDataFile[] = [];
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const d of entries) {
+      if (d.name.startsWith(".")) continue;
+      const fullPath = path.join(dir, d.name);
+      if (d.isFile()) {
         const stat = fs.statSync(fullPath);
-        return { name: d.name, path: fullPath, size: stat.size, dir: category };
-      });
+        // Use relative path from root dir as display name for nested files
+        const relName = root !== dir ? path.relative(root, fullPath) : d.name;
+        results.push({ name: relName, path: fullPath, size: stat.size, dir: category });
+      } else if (d.isDirectory() && category !== "root") {
+        // Recurse into subdirectories for raw/formatted (not root level)
+        results.push(...listDirFiles(fullPath, category, root));
+      }
+    }
+    return results;
   } catch {
     return [];
   }
 }
 
+export function ensureSharedDataDirs(): void {
+  fs.mkdirSync(SHARED_DATA_DIR, { recursive: true });
+  fs.mkdirSync(path.join(SHARED_DATA_DIR, "raw"), { recursive: true });
+  fs.mkdirSync(path.join(SHARED_DATA_DIR, "formatted"), { recursive: true });
+}
+
 export function getGlobalDataStatus(): GlobalDataStatus {
+  // Auto-create shared-data dirs if missing
+  ensureSharedDataDirs();
+
   const rawDir = path.join(SHARED_DATA_DIR, "raw");
   const formattedDir = path.join(SHARED_DATA_DIR, "formatted");
 

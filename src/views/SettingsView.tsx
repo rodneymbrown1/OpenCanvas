@@ -1,13 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { Key, Bot, Plug, FileText } from "lucide-react";
+import { Key, Bot, Plug, FileText, Globe } from "lucide-react";
 import { AgentSettingsPage } from "./SettingsAgentsView";
 import { ApiKeysPage } from "./SettingsApiKeysView";
 import { McpPage } from "./SettingsMcpView";
 import { ProjectConfigPanel } from "./ProjectConfigView";
+import { GlobalSettingsPage } from "./SettingsGlobalView";
 
 const TABS = [
+  { id: "global", icon: Globe, label: "Global Settings" },
   { id: "agents", icon: Bot, label: "Coding Agents" },
   { id: "api-keys", icon: Key, label: "API Keys" },
   { id: "mcp", icon: Plug, label: "MCP Servers" },
@@ -17,7 +19,7 @@ const TABS = [
 type SettingsTab = (typeof TABS)[number]["id"];
 
 export default function SettingsView() {
-  const [tab, setTab] = useState<SettingsTab>("agents");
+  const [tab, setTab] = useState<SettingsTab>("global");
 
   return (
     <div className="flex h-full">
@@ -42,6 +44,7 @@ export default function SettingsView() {
       </div>
 
       <div className="flex-1 overflow-auto">
+        {tab === "global" && <GlobalSettingsPage />}
         {tab === "agents" && <AgentSettingsPage />}
         {tab === "api-keys" && <ApiKeysPage />}
         {tab === "mcp" && <McpPage />}

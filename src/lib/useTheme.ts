@@ -5,13 +5,13 @@ import { useState, useEffect, useCallback } from "react";
 export type Theme = "dark" | "light";
 
 export function useTheme(): [Theme, () => void] {
-  const [theme, setTheme] = useState<Theme>("dark");
+  const [theme, setTheme] = useState<Theme>("light");
 
   useEffect(() => {
     fetch("/api/config")
       .then((r) => r.json())
       .then((config) => {
-        const t = config.preferences?.theme === "light" ? "light" : "dark";
+        const t = config.preferences?.theme === "dark" ? "dark" : "light";
         setTheme(t);
         document.documentElement.setAttribute("data-theme", t);
       })

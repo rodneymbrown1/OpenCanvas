@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useSession } from "@/lib/SessionContext";
 import { useView } from "@/lib/ViewContext";
+import { useProject } from "@/lib/ProjectContext";
 import {
   FolderOpen,
   Plus,
@@ -10,9 +11,14 @@ import {
   Clock,
   ExternalLink,
   HardDrive,
-  Settings2,
   RefreshCw,
   CheckCircle,
+  FolderSearch,
+  AlertTriangle,
+  Wifi,
+  WifiOff,
+  Square,
+  Play,
 } from "lucide-react";
 
 interface ProjectEntry {
@@ -20,6 +26,7 @@ interface ProjectEntry {
   path: string;
   lastOpened?: string;
   description?: string;
+  exists?: boolean;
 }
 
 interface SharedFile {
@@ -113,14 +120,25 @@ function SetupScreen({ onSetup }: { onSetup: (home?: string) => void }) {
 
 // ── Main View ─────────────────────────────────────────────────────────────────
 
+const revealInFinder = (path: string) =>
+  fetch("/api/files/reveal", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+
 export default function ProjectsView() {
   const { session, setWorkDir } = useSession();
   const { setView } = useView();
+  const { state: projectState, stopApp } = useProject();
   const [state, setState] = useState<GlobalState | null>(null);
   const [loading, setLoading] = useState(true);
   const [newName, setNewName] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [createError, setCreateError] = useState("");
+  // Server status for non-current projects: path -> { running, port }
+  const [serverStatus, setServerStatus] = useState<Record<string, { running: boolean; port: number | null }>>({});
+  const [stoppingPaths, setStoppingPaths] = useState<Set<string>>(new Set());
 
   const fetchState = useCallback(async () => {
     try {
@@ -133,6 +151,59 @@ export default function ProjectsView() {
   useEffect(() => {
     fetchState();
   }, [fetchState]);
+
+  // Poll server status for all registered projects
+  useEffect(() => {
+    if (!state?.projects.length) return;
+
+    async function pollServerStatus() {
+      const statuses: Record<string, { running: boolean; port: number | null }> = {};
+      await Promise.all(
+        state!.projects.map(async (project) => {
+          try {
+            const res = await fetch(`/api/stack?cwd=${encodeURIComponent(project.path)}`);
+            if (res.ok) {
+              const data = await res.json();
+              statuses[project.path] = {
+                running: !!data.running,
+                port: data.session?.detectedPort || null,
+              };
+            } else {
+              statuses[project.path] = { running: false, port: null };
+            }
+          } catch {
+            statuses[project.path] = { running: false, port: null };
+          }
+        })
+      );
+      setServerStatus(statuses);
+    }
+
+    pollServerStatus();
+    const interval = setInterval(pollServerStatus, 5000);
+    return () => clearInterval(interval);
+  }, [state?.projects]);
+
+  const handleStopServer = async (projectPath: string) => {
+    setStoppingPaths((prev) => new Set(prev).add(projectPath));
+    try {
+      await fetch("/api/stack?action=stop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cwd: projectPath }),
+      });
+    } catch {}
+    setStoppingPaths((prev) => {
+      const next = new Set(prev);
+      next.delete(projectPath);
+      return next;
+    });
+    // Refresh server status
+    setServerStatus((prev) => ({
+      ...prev,
+      [projectPath]: { running: false, port: null },
+    }));
+  };
 
   const handleSetup = async (customHome?: string) => {
     await fetch("/api/projects", {
@@ -170,6 +241,8 @@ export default function ProjectsView() {
   };
 
   const handleRemove = async (projectPath: string) => {
+    const name = projectPath.split("/").pop() || projectPath;
+    if (!confirm(`Remove project "${name}" from the registry? (The files on disk will not be deleted.)`)) return;
     await fetch("/api/projects", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -313,11 +386,20 @@ export default function ProjectsView() {
               <HardDrive size={14} className="text-[var(--accent)]" />
               <span className="text-xs font-medium">Open Canvas Home</span>
             </div>
-            {state.sharedData.length > 0 && (
-              <span className="text-[10px] text-[var(--text-muted)]">
-                {state.sharedData.length} shared file{state.sharedData.length !== 1 ? "s" : ""}
-              </span>
-            )}
+            <div className="flex items-center gap-2">
+              {state.sharedData.length > 0 && (
+                <span className="text-[10px] text-[var(--text-muted)]">
+                  {state.sharedData.length} shared file{state.sharedData.length !== 1 ? "s" : ""}
+                </span>
+              )}
+              <button
+                onClick={() => revealInFinder(state.home)}
+                className="w-6 h-6 rounded flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors"
+                title="Reveal in Finder"
+              >
+                <FolderSearch size={12} />
+              </button>
+            </div>
           </div>
           <p className="text-[11px] font-mono text-[var(--text-muted)] mt-1 ml-5">{state.home}</p>
         </div>
@@ -345,29 +427,77 @@ export default function ProjectsView() {
                             <CheckCircle size={10} /> active
                           </span>
                         )}
+                        {project.exists === false && (
+                          <span className="flex items-center gap-1 text-[10px] text-[var(--error)]">
+                            <AlertTriangle size={10} /> missing
+                          </span>
+                        )}
                       </div>
                       <p className="text-[11px] text-[var(--text-muted)] font-mono truncate mt-0.5">
                         {project.path}
                       </p>
-                      {project.lastOpened && (
-                        <p className="flex items-center gap-1 text-[10px] text-[var(--text-muted)] mt-1">
-                          <Clock size={9} />
-                          {new Date(project.lastOpened).toLocaleDateString()}
-                        </p>
-                      )}
+                      <div className="flex items-center gap-3 mt-1">
+                        {project.lastOpened && (
+                          <p className="flex items-center gap-1 text-[10px] text-[var(--text-muted)]">
+                            <Clock size={9} />
+                            {new Date(project.lastOpened).toLocaleDateString()}
+                          </p>
+                        )}
+                        {/* Server status indicator */}
+                        {(() => {
+                          const port = isCurrent ? projectState.appPort : serverStatus[project.path]?.port;
+                          const running = isCurrent ? !!projectState.appPort : serverStatus[project.path]?.running;
+                          const isStopping = stoppingPaths.has(project.path);
+                          if (running && port) {
+                            return (
+                              <div className="flex items-center gap-1.5">
+                                <span className="flex items-center gap-1 text-[10px] font-mono text-green-400">
+                                  <Wifi size={10} /> :{port}
+                                </span>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (isCurrent) stopApp();
+                                    else handleStopServer(project.path);
+                                  }}
+                                  disabled={isStopping}
+                                  className="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] text-[var(--text-muted)] hover:text-[var(--error)] border border-[var(--border)] transition-colors disabled:opacity-50"
+                                  title="Stop server"
+                                >
+                                  <Square size={8} /> {isStopping ? "Stopping..." : "Stop"}
+                                </button>
+                              </div>
+                            );
+                          }
+                          if (running && !port) {
+                            return (
+                              <span className="flex items-center gap-1 text-[10px] text-yellow-400">
+                                <Wifi size={10} /> starting...
+                              </span>
+                            );
+                          }
+                          return (
+                            <span className="flex items-center gap-1 text-[10px] text-[var(--text-muted)]">
+                              <WifiOff size={10} /> no server
+                            </span>
+                          );
+                        })()}
+                      </div>
                     </div>
                     <div className="flex items-center gap-1 ml-2 shrink-0">
                       {!isCurrent ? (
                         <>
                           <button
                             onClick={() => handleOpen(project)}
-                            className="px-2.5 py-1 rounded text-xs bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--accent)] border border-[var(--border)] transition-colors"
+                            disabled={project.exists === false}
+                            className="px-2.5 py-1 rounded text-xs bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--accent)] border border-[var(--border)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                           >
                             Open
                           </button>
                           <button
                             onClick={() => handleOpenInNewTab(project)}
-                            className="w-6 h-6 rounded flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors"
+                            disabled={project.exists === false}
+                            className="w-6 h-6 rounded flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors disabled:opacity-40"
                             title="Open in new tab"
                           >
                             <ExternalLink size={12} />
@@ -382,6 +512,13 @@ export default function ProjectsView() {
                           new tab
                         </button>
                       )}
+                      <button
+                        onClick={() => revealInFinder(project.path)}
+                        className="w-6 h-6 rounded flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors"
+                        title="Reveal in Finder"
+                      >
+                        <FolderSearch size={12} />
+                      </button>
                       <button
                         onClick={() => handleRemove(project.path)}
                         className="w-6 h-6 rounded flex items-center justify-center text-[var(--text-muted)] hover:text-red-400 transition-colors"

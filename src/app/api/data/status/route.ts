@@ -11,23 +11,30 @@ interface DataFile {
   isGlobalRef?: boolean;
 }
 
-function listFiles(dirPath: string, category: "raw" | "formatted" | "other"): DataFile[] {
+function listFiles(dirPath: string, category: "raw" | "formatted" | "other", baseDir?: string): DataFile[] {
   if (!fs.existsSync(dirPath)) return [];
+  const root = baseDir || dirPath;
   try {
-    return fs
-      .readdirSync(dirPath, { withFileTypes: true })
-      .filter((d) => d.isFile() && !d.name.startsWith("."))
-      .map((d) => {
-        const fullPath = path.join(dirPath, d.name);
+    const results: DataFile[] = [];
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    for (const d of entries) {
+      if (d.name.startsWith(".")) continue;
+      const fullPath = path.join(dirPath, d.name);
+      if (d.isFile()) {
         const stat = fs.lstatSync(fullPath);
-        return {
-          name: d.name,
+        const relName = root !== dirPath ? path.relative(root, fullPath) : d.name;
+        results.push({
+          name: relName,
           path: fullPath,
           size: stat.size,
           dir: category,
           isGlobalRef: stat.isSymbolicLink(),
-        };
-      });
+        });
+      } else if (d.isDirectory() && category !== "other") {
+        results.push(...listFiles(fullPath, category, root));
+      }
+    }
+    return results;
   } catch {
     return [];
   }

@@ -5,9 +5,11 @@ import { FileExplorer } from "@/components/FileExplorer";
 import { AgentSelector } from "@/components/AgentSelector";
 import { FilePreviewModal } from "@/components/FilePreviewModal";
 import { FolderPickerModal } from "@/components/FolderPickerModal";
+import { GlobalDataPicker } from "@/components/GlobalDataPicker";
 import { ProjectStatusBar } from "@/components/ProjectStatusBar";
 import { useSession } from "@/lib/SessionContext";
 import { useProject } from "@/lib/ProjectContext";
+import { useTerminals } from "@/lib/TerminalContext";
 import Image from "next/image";
 import {
   PanelLeftClose,
@@ -89,12 +91,16 @@ export default function WorkspaceView() {
   const { session, setAgent, setWorkDir } = useSession();
   const { agent, workDir } = session;
   const { state: project, refreshAppPreview, clearAppPort, stopApp } = useProject();
+  const { state: terminalState } = useTerminals();
+  const hasConnectedTerminal = terminalState.tabs.some((t) => t.status === "connected");
 
   const [showExplorer, setShowExplorer] = useState(true);
   const [explorerWidth, setExplorerWidth] = useState(224);
   const [draggingExplorer, setDraggingExplorer] = useState(false);
   const [previewFile, setPreviewFile] = useState<string | null>(null);
   const [showFolderPicker, setShowFolderPicker] = useState(false);
+  const [globalPickerOpen, setGlobalPickerOpen] = useState(false);
+  const [sharedDataDir, setSharedDataDir] = useState<string | null>(null);
 
   // Load config on mount
   useEffect(() => {
@@ -108,6 +114,11 @@ export default function WorkspaceView() {
           setAgent(config.agent.active);
         }
       })
+      .catch(() => {});
+    // Fetch shared data dir for global picker
+    fetch("/api/data/status?scope=global")
+      .then((r) => r.json())
+      .then((data) => { if (data.sharedDataDir) setSharedDataDir(data.sharedDataDir); })
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -189,7 +200,11 @@ export default function WorkspaceView() {
               className="border-r border-[var(--border)] bg-[var(--bg-secondary)] overflow-hidden shrink-0"
             >
               {workDir ? (
-                <FileExplorer onFilePreview={setPreviewFile} />
+                <FileExplorer
+                  onFilePreview={setPreviewFile}
+                  onOpenGlobalPicker={sharedDataDir ? () => setGlobalPickerOpen(true) : undefined}
+                  pollInterval={3000}
+                />
               ) : (
                 <div className="p-3 space-y-3">
                   <p className="text-xs text-[var(--text-muted)]">No folder open.</p>
@@ -261,7 +276,7 @@ export default function WorkspaceView() {
                 <p className="text-sm text-[var(--text-muted)]">
                   Your app preview will appear here.
                 </p>
-                {session.agentConnected ? (
+                {hasConnectedTerminal ? (
                   <AppControls />
                 ) : (
                   <p className="text-xs text-[var(--text-muted)]">
@@ -277,6 +292,9 @@ export default function WorkspaceView() {
       {/* Modals */}
       {previewFile && <FilePreviewModal filePath={previewFile} onClose={() => setPreviewFile(null)} />}
       {showFolderPicker && <FolderPickerModal onSelect={handleFolderSelect} onClose={() => setShowFolderPicker(false)} />}
+      {globalPickerOpen && sharedDataDir && (
+        <GlobalDataPicker sharedDataDir={sharedDataDir} onClose={() => setGlobalPickerOpen(false)} />
+      )}
     </div>
   );
 }

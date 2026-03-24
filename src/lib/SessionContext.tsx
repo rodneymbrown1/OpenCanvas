@@ -208,6 +208,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   // ── Public actions ──────────────────────────────────────────────────────
   const setAgent = useCallback((agent: AgentType) => {
     setSession((s) => ({ ...s, agent }));
+    // Persist agent choice to config
+    fetch("/api/config", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent: { active: agent } }),
+    }).catch(() => {});
   }, []);
 
   const setWorkDir = useCallback((workDir: string) => {

@@ -79,6 +79,28 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   // Debounce: port must appear in 2 consecutive polls
   const candidatePortRef = useRef<number | null>(null);
 
+  // ── Reset state when project (workDir) changes ─────────────────────────────
+  const prevWorkDirRef = useRef(session.workDir);
+
+  useEffect(() => {
+    if (prevWorkDirRef.current && prevWorkDirRef.current !== session.workDir) {
+      setState({
+        pipelinePhase: "idle",
+        dataFiles: [],
+        appPort: null,
+        appStatus: "idle",
+        stackSessionId: null,
+        detectedPorts: [],
+        startupLog: [],
+        iframeKey: 0,
+      });
+      baselinePortsRef.current = new Set();
+      baselineTakenRef.current = false;
+      candidatePortRef.current = null;
+    }
+    prevWorkDirRef.current = session.workDir;
+  }, [session.workDir]);
+
   // ── Stack session polling (checks dedicated stack session for port + log) ─
 
   useEffect(() => {

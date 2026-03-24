@@ -11,6 +11,8 @@ interface TerminalProps {
   cwd: string;
   ptyPort?: number;
   sessionId?: string | null;
+  tabId?: string;
+  visible?: boolean;
   onSessionCreated?: (sessionId: string) => void;
   onReconnectFailed?: () => void;
 }
@@ -31,6 +33,8 @@ export function AgentTerminal({
   cwd,
   ptyPort = 3001,
   sessionId,
+  tabId,
+  visible = true,
   onSessionCreated,
   onReconnectFailed,
 }: TerminalProps) {
@@ -285,6 +289,26 @@ export function AgentTerminal({
       }
     };
   }, [connect]);
+
+  // Re-fit terminal when it becomes visible (tab switch)
+  useEffect(() => {
+    if (visible && fitRef.current && termRef.current) {
+      // Small delay to let CSS display change take effect
+      requestAnimationFrame(() => {
+        fitRef.current?.fit();
+        // Also send resize to PTY server
+        if (wsRef.current?.readyState === WebSocket.OPEN && termRef.current) {
+          wsRef.current.send(
+            JSON.stringify({
+              type: "resize",
+              cols: termRef.current.cols,
+              rows: termRef.current.rows,
+            })
+          );
+        }
+      });
+    }
+  }, [visible]);
 
   // Update xterm theme when data-theme attribute changes
   useEffect(() => {

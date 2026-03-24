@@ -401,6 +401,24 @@ const httpServer = http.createServer((req, res) => {
     return;
   }
 
+  // GET /sessions/:id/output — return last output lines for context sharing
+  const outputMatch = req.url?.match(/^\/sessions\/(.+)\/output$/);
+  if (outputMatch && req.method === "GET") {
+    const session = sessions.get(outputMatch[1]);
+    if (session) {
+      res.end(JSON.stringify({
+        sessionId: session.id,
+        agent: session.agent,
+        output: session.lastOutput,
+        status: session.status,
+      }));
+    } else {
+      res.writeHead(404);
+      res.end(JSON.stringify({ error: "Session not found" }));
+    }
+    return;
+  }
+
   const match = req.url?.match(/^\/sessions\/(.+)$/);
   if (match) {
     const session = sessions.get(match[1]);

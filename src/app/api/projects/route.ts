@@ -16,7 +16,9 @@ import {
 export async function GET() {
   const configured = isSetUp();
   const config = configured ? readGlobalConfig() : null;
-  const projects = configured ? listProjects() : [];
+  const projects = configured
+    ? listProjects().map((p) => ({ ...p, exists: fs.existsSync(p.path) }))
+    : [];
   const sharedData = configured ? listSharedData() : [];
 
   return NextResponse.json({

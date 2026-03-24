@@ -1,5 +1,5 @@
 workspace:
-  root: /Users/rodneymbrown/Software/picasso-imports
+  root: /Users/rodneymbrown/.open-canvas/projects/activate
 agent:
   active: claude
   claude:
@@ -32,9 +32,9 @@ server:
 preferences:
   persist_jobs: true
   default_stack: nextjs-tailwind
-  theme: dark
+  theme: light
 session:
-  lastSessionId: null
+  lastSessionId: 79cdefe1
   lastAgent: claude
-  lastWorkDir: /Users/rodneymbrown/Software/picasso-imports
-  connectedAt: null
+  lastWorkDir: /Users/rodneymbrown/.open-canvas/projects/activate
+  connectedAt: 2026-03-24T08:06:58.178Z
