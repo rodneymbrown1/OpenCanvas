@@ -1,16 +1,8 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
 import { X, Plus, Terminal } from "lucide-react";
 import { useTerminals } from "@/lib/TerminalContext";
-import type { AgentType, TerminalTab } from "@/lib/types/terminal";
-
-const AGENT_OPTIONS: { id: AgentType; label: string }[] = [
-  { id: "claude", label: "Claude" },
-  { id: "codex", label: "Codex" },
-  { id: "gemini", label: "Gemini" },
-  { id: "shell", label: "Shell" },
-];
+import type { TerminalTab } from "@/lib/types/terminal";
 
 function statusColor(status: TerminalTab["status"]): string {
   switch (status) {
@@ -26,32 +18,12 @@ function statusColor(status: TerminalTab["status"]): string {
 }
 
 interface TerminalTabBarProps {
-  onTabCreated?: (tabId: string, agent: AgentType) => void;
+  onAddClicked?: () => void;
 }
 
-export function TerminalTabBar({ onTabCreated }: TerminalTabBarProps) {
-  const { state, addTab, removeTab, setActiveTab } = useTerminals();
+export function TerminalTabBar({ onAddClicked }: TerminalTabBarProps) {
+  const { state, removeTab, setActiveTab } = useTerminals();
   const { tabs, activeTabId } = state;
-  const [showDropdown, setShowDropdown] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
-
-  // Close dropdown on outside click
-  useEffect(() => {
-    if (!showDropdown) return;
-    const handler = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setShowDropdown(false);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [showDropdown]);
-
-  const handleAddTab = (agent: AgentType) => {
-    const tabId = addTab(agent);
-    setShowDropdown(false);
-    onTabCreated?.(tabId, agent);
-  };
 
   const handleCloseTab = (e: React.MouseEvent, tabId: string) => {
     e.stopPropagation();
@@ -83,32 +55,16 @@ export function TerminalTabBar({ onTabCreated }: TerminalTabBarProps) {
         </button>
       ))}
 
-      {/* Add tab button */}
-      <div className="relative shrink-0" ref={dropdownRef}>
-        <button
-          onClick={() => setShowDropdown(!showDropdown)}
-          className="flex items-center justify-center w-7 h-7 text-[var(--text-muted)] hover:text-[var(--accent)] hover:bg-[var(--bg-tertiary)] transition-colors"
-          title="New terminal"
-        >
-          <Plus size={14} />
-        </button>
+      {/* Add tab button — opens connect modal */}
+      <button
+        onClick={onAddClicked}
+        className="flex items-center justify-center w-7 h-7 shrink-0 text-[var(--text-muted)] hover:text-[var(--accent)] hover:bg-[var(--bg-tertiary)] transition-colors"
+        title="New terminal"
+      >
+        <Plus size={14} />
+      </button>
 
-        {showDropdown && (
-          <div className="absolute top-full left-0 mt-1 z-50 bg-[var(--bg-secondary)] border border-[var(--border)] rounded-lg shadow-xl py-1 min-w-[140px]">
-            {AGENT_OPTIONS.map((opt) => (
-              <button
-                key={opt.id}
-                onClick={() => handleAddTab(opt.id)}
-                className="w-full text-left px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--accent)] transition-colors"
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Label */}
+      {/* Label when no tabs */}
       {tabs.length === 0 && (
         <span className="px-3 py-1.5 text-xs text-[var(--text-muted)]">
           TERMINAL

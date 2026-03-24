@@ -12,8 +12,8 @@ import type { AgentType } from "@/lib/types/terminal";
 
 export function TerminalPanel() {
   const { view } = useView();
-  const { session, connect: sessionConnect, disconnect: sessionDisconnect } = useSession();
-  const { workDir, agent: defaultAgent } = session;
+  const { session, connect: sessionConnect } = useSession();
+  const { workDir } = session;
 
   const {
     state,
@@ -27,7 +27,6 @@ export function TerminalPanel() {
 
   const [isDragging, setIsDragging] = useState(false);
   const [showConnectModal, setShowConnectModal] = useState(false);
-  const [connectingTabId, setConnectingTabId] = useState<string | null>(null);
   const [ptyReady, setPtyReady] = useState(false);
   const [ptyStarting, setPtyStarting] = useState(false);
 
@@ -71,7 +70,10 @@ export function TerminalPanel() {
   const handleMouseMove = useCallback(
     (e: MouseEvent) => {
       if (!isDragging) return;
-      const newHeight = Math.max(120, Math.min(window.innerHeight - e.clientY, window.innerHeight - 200));
+      const newHeight = Math.max(
+        120,
+        Math.min(window.innerHeight - e.clientY, window.innerHeight - 200)
+      );
       setTerminalHeight(newHeight);
     },
     [isDragging, setTerminalHeight]
@@ -90,13 +92,12 @@ export function TerminalPanel() {
     }
   }, [isDragging, handleMouseMove, handleMouseUp]);
 
-  // ── Tab connection handlers ───────────────────────────────────────────────
+  // ── Connection handlers ───────────────────────────────────────────────────
 
-  const handleConnectTab = async (tabId: string) => {
+  const ensurePtyReady = useCallback(async () => {
     const ready = await checkPtyServer();
     if (!ready) await startPtyServer();
-    updateTabStatus(tabId, "connecting");
-  };
+  }, [checkPtyServer, startPtyServer]);
 
   const handleSessionCreated = (tabId: string, sessionId: string) => {
     connectTab(tabId, sessionId);
@@ -108,32 +109,26 @@ export function TerminalPanel() {
     disconnectTab(tabId);
   };
 
-  const handleTabCreated = (tabId: string, agent: AgentType) => {
-    if (agent === "shell") {
-      // Shell terminals auto-connect, no modal needed
-      handleConnectTab(tabId);
-    } else {
-      setConnectingTabId(tabId);
-      setShowConnectModal(true);
-    }
-  };
+  // ── "+" button and modal flow ─────────────────────────────────────────────
 
-  const handleAddAndConnect = () => {
+  const handleAddClicked = () => {
     if (!workDir) return;
-    const tabId = addTab(defaultAgent);
-    setConnectingTabId(tabId);
     setShowConnectModal(true);
   };
 
-  const handleModalConnected = () => {
+  const handleModalConnected = async (agent: AgentType) => {
     setShowConnectModal(false);
-    if (connectingTabId) {
-      handleConnectTab(connectingTabId);
-      setConnectingTabId(null);
-    }
+    // Create the tab and immediately start connecting
+    const tabId = addTab(agent);
+    await ensurePtyReady();
+    updateTabStatus(tabId, "connecting");
   };
 
-  // Auto-connect tabs that have a sessionId but are "disconnected" (reconnect scenario)
+  const handleModalClosed = () => {
+    setShowConnectModal(false);
+  };
+
+  // ── Auto-reconnect tabs with existing sessionIds on mount / project switch ──
   const autoConnectingRef = useRef(new Set<string>());
   useEffect(() => {
     for (const tab of tabs) {
@@ -149,14 +144,7 @@ export function TerminalPanel() {
     }
   }, [tabs, ptyReady, updateTabStatus]);
 
-  // ── Determine which modal agent to use ────────────────────────────────────
-  const connectingTab = connectingTabId ? tabs.find((t) => t.id === connectingTabId) : null;
-  const modalAgent = connectingTab?.agent || defaultAgent;
-
   // ── Render ────────────────────────────────────────────────────────────────
-
-  const activeTab = tabs.find((t) => t.id === activeTabId);
-  const showTerminal = isWorkspace && tabs.length > 0;
 
   return (
     <>
@@ -173,7 +161,7 @@ export function TerminalPanel() {
         </div>
 
         {/* Tab bar */}
-        <TerminalTabBar onTabCreated={handleTabCreated} />
+        <TerminalTabBar onAddClicked={handleAddClicked} />
 
         {/* Terminal content area */}
         <div
@@ -185,7 +173,7 @@ export function TerminalPanel() {
             <div className="flex flex-col h-full bg-[var(--bg-primary)]">
               <div className="flex-1 flex items-center justify-center">
                 <button
-                  onClick={handleAddAndConnect}
+                  onClick={handleAddClicked}
                   disabled={!workDir}
                   className={`flex items-center gap-2 text-sm transition-colors ${
                     workDir
@@ -224,7 +212,9 @@ export function TerminalPanel() {
                       }
                       tabId={tab.id}
                       visible={isActive}
-                      onSessionCreated={(sid) => handleSessionCreated(tab.id, sid)}
+                      onSessionCreated={(sid) =>
+                        handleSessionCreated(tab.id, sid)
+                      }
                       onReconnectFailed={() => handleReconnectFailed(tab.id)}
                     />
                   ) : tab.status === "exited" ? (
@@ -235,7 +225,10 @@ export function TerminalPanel() {
                             Session ended
                           </p>
                           <button
-                            onClick={() => handleConnectTab(tab.id)}
+                            onClick={async () => {
+                              await ensurePtyReady();
+                              updateTabStatus(tab.id, "connecting");
+                            }}
                             className="text-xs text-[var(--accent)] hover:underline"
                           >
                             Reconnect
@@ -247,11 +240,11 @@ export function TerminalPanel() {
                     <div className="flex flex-col h-full bg-[var(--bg-primary)]">
                       <div className="flex-1 flex items-center justify-center">
                         <button
-                          onClick={() => {
-                            setConnectingTabId(tab.id);
-                            setShowConnectModal(true);
+                          onClick={async () => {
+                            await ensurePtyReady();
+                            updateTabStatus(tab.id, "connecting");
                           }}
-                          disabled={!ptyReady}
+                          disabled={!ptyReady && !ptyStarting}
                           className={`text-sm transition-colors ${
                             ptyReady
                               ? "text-[var(--text-muted)] hover:text-[var(--accent)]"
@@ -279,14 +272,10 @@ export function TerminalPanel() {
         </div>
       </div>
 
-      {/* Connect modal — only for agent types, not plain shell */}
-      {showConnectModal && modalAgent !== "shell" && (
+      {/* Connect modal with built-in agent picker */}
+      {showConnectModal && (
         <ConnectAgentModal
-          agent={modalAgent}
-          onClose={() => {
-            setShowConnectModal(false);
-            setConnectingTabId(null);
-          }}
+          onClose={handleModalClosed}
           onConnected={handleModalConnected}
         />
       )}

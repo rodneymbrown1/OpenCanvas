@@ -73,7 +73,10 @@ function migrateLegacyState(workDir: string): ProjectTerminalState | null {
       id: generateTabId(),
       sessionId: legacy.sessionId || null,
       agent: legacy.agent || "claude",
-      label: (legacy.agent || "Claude").charAt(0).toUpperCase() + (legacy.agent || "claude").slice(1) + " 1",
+      label:
+        (legacy.agent || "Claude").charAt(0).toUpperCase() +
+        (legacy.agent || "claude").slice(1) +
+        " 1",
       status: legacy.agentConnected ? "connected" : "disconnected",
       createdAt: new Date().toISOString(),
     };
@@ -87,28 +90,26 @@ function migrateLegacyState(workDir: string): ProjectTerminalState | null {
   return null;
 }
 
+function loadStateForProject(workDir: string): ProjectTerminalState {
+  const persisted = readPersistedState(workDir);
+  if (persisted) return persisted;
+  const migrated = migrateLegacyState(workDir);
+  if (migrated) return migrated;
+  return createDefaultProjectState();
+}
+
 // ── Context ─────────────────────────────────────────────────────────────────
 
 interface TerminalContextType {
-  /** Current project's terminal state */
   state: ProjectTerminalState;
-  /** Add a new terminal tab for the given agent */
   addTab: (agent: AgentType) => string;
-  /** Remove a tab (does NOT kill the PTY process) */
   removeTab: (tabId: string) => void;
-  /** Switch to a tab */
   setActiveTab: (tabId: string) => void;
-  /** Mark a tab as connected with a PTY session ID */
   connectTab: (tabId: string, sessionId: string) => void;
-  /** Mark a tab as disconnected */
   disconnectTab: (tabId: string) => void;
-  /** Update a tab's status */
   updateTabStatus: (tabId: string, status: TerminalTab["status"]) => void;
-  /** Set the terminal panel height */
   setTerminalHeight: (height: number) => void;
-  /** Rename a tab */
   renameTab: (tabId: string, label: string) => void;
-  /** Whether we're reconciling sessions on mount */
   reconciling: boolean;
 }
 
@@ -118,69 +119,53 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
   const { session } = useSession();
   const { workDir } = session;
 
-  // Store per-project states in a ref map so we don't lose state when switching projects
+  // Per-project state cache (survives re-renders, holds state for all visited projects)
   const statesRef = useRef<Map<string, ProjectTerminalState>>(new Map());
 
+  // Track which workDir the current `state` belongs to, so the persist effect
+  // never writes one project's state under another project's key.
+  const stateWorkDirRef = useRef(workDir);
+
   const [state, setState] = useState<ProjectTerminalState>(() => {
-    // Try persisted state first, then legacy migration, then default
-    const persisted = readPersistedState(workDir);
-    if (persisted) {
-      statesRef.current.set(slugify(workDir), persisted);
-      return persisted;
-    }
-    const migrated = migrateLegacyState(workDir);
-    if (migrated) {
-      statesRef.current.set(slugify(workDir), migrated);
-      return migrated;
-    }
-    const fresh = createDefaultProjectState();
-    statesRef.current.set(slugify(workDir), fresh);
-    return fresh;
+    const initial = loadStateForProject(workDir);
+    statesRef.current.set(slugify(workDir), initial);
+    return initial;
   });
 
   const [reconciling, setReconciling] = useState(false);
-  const currentWorkDirRef = useRef(workDir);
 
-  // ── Persist on every state change ──────────────────────────────────────────
+  // ── Persist state — but ONLY for the project that owns it ──────────────────
   useEffect(() => {
-    if (!workDir) return;
-    persistState(workDir, state);
-    statesRef.current.set(slugify(workDir), state);
-  }, [state, workDir]);
+    const ownerDir = stateWorkDirRef.current;
+    if (!ownerDir) return;
+    persistState(ownerDir, state);
+    statesRef.current.set(slugify(ownerDir), state);
+  }, [state]);
 
-  // ── Switch project: save current state, load target project's state ────────
+  // ── Project switch: save old state, load new project's state ───────────────
   useEffect(() => {
-    if (currentWorkDirRef.current === workDir) return;
+    if (stateWorkDirRef.current === workDir) return;
 
-    // Save current state for the old project
-    statesRef.current.set(slugify(currentWorkDirRef.current), state);
-    currentWorkDirRef.current = workDir;
+    // Save current state for the project we're leaving
+    const oldDir = stateWorkDirRef.current;
+    setState((currentState) => {
+      // Persist the old project's state before we switch
+      if (oldDir) {
+        persistState(oldDir, currentState);
+        statesRef.current.set(slugify(oldDir), currentState);
+      }
+      return currentState;
+    });
 
-    // Load state for new project
+    // Update the owner ref BEFORE setting new state
+    stateWorkDirRef.current = workDir;
+
+    // Load state for the new project
     const slug = slugify(workDir);
     const cached = statesRef.current.get(slug);
-    if (cached) {
-      setState(cached);
-      return;
-    }
-
-    const persisted = readPersistedState(workDir);
-    if (persisted) {
-      statesRef.current.set(slug, persisted);
-      setState(persisted);
-      return;
-    }
-
-    const migrated = migrateLegacyState(workDir);
-    if (migrated) {
-      statesRef.current.set(slug, migrated);
-      setState(migrated);
-      return;
-    }
-
-    const fresh = createDefaultProjectState();
-    statesRef.current.set(slug, fresh);
-    setState(fresh);
+    const newState = cached || loadStateForProject(workDir);
+    statesRef.current.set(slug, newState);
+    setState(newState);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workDir]);
 
@@ -194,7 +179,10 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
       setReconciling(true);
       try {
         const res = await fetch("/api/sessions");
-        if (!res.ok) { setReconciling(false); return; }
+        if (!res.ok) {
+          setReconciling(false);
+          return;
+        }
         const data = await res.json();
         const runningSessions = new Set(
           (data.sessions || [])
@@ -209,7 +197,7 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
           tabs: prev.tabs.map((tab) => {
             if (!tab.sessionId) return tab;
             if (runningSessions.has(tab.sessionId)) {
-              return { ...tab, status: "disconnected" as const }; // will auto-reconnect
+              return { ...tab, status: "disconnected" as const };
             }
             return { ...tab, status: "exited" as const, sessionId: null };
           }),
@@ -219,57 +207,61 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
     }
 
     reconcile();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ── Actions ────────────────────────────────────────────────────────────────
 
-  const addTab = useCallback((agent: AgentType): string => {
-    const id = generateTabId();
-    setState((prev) => {
-      const tab: TerminalTab = {
-        id,
-        sessionId: null,
-        agent,
-        label: nextLabel(prev.tabs, agent),
-        status: "disconnected",
-        createdAt: new Date().toISOString(),
-      };
+  const addTab = useCallback(
+    (agent: AgentType): string => {
+      const id = generateTabId();
+      setState((prev) => {
+        const tab: TerminalTab = {
+          id,
+          sessionId: null,
+          agent,
+          label: nextLabel(prev.tabs, agent),
+          status: "disconnected",
+          createdAt: new Date().toISOString(),
+        };
 
-      // Trigger cross-agent context handoff (async, non-blocking)
-      const existingAgents = prev.tabs
-        .filter((t) => t.agent !== agent && t.status === "connected")
-        .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-      if (existingAgents.length > 0 && workDir) {
-        const from = existingAgents[0];
-        fetch("/api/context-handoff", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            workDir,
-            fromAgent: from.agent,
-            toAgent: agent,
-            fromSessionId: from.sessionId,
-          }),
-        }).catch(() => {}); // Fire and forget
-      }
+        // Trigger cross-agent context handoff (async, non-blocking)
+        const existingAgents = prev.tabs
+          .filter((t) => t.agent !== agent && t.status === "connected")
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        if (existingAgents.length > 0 && workDir) {
+          const from = existingAgents[0];
+          fetch("/api/context-handoff", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              workDir,
+              fromAgent: from.agent,
+              toAgent: agent,
+              fromSessionId: from.sessionId,
+            }),
+          }).catch(() => {});
+        }
 
-      return {
-        ...prev,
-        tabs: [...prev.tabs, tab],
-        activeTabId: id,
-      };
-    });
-    return id;
-  }, [workDir]);
+        return {
+          ...prev,
+          tabs: [...prev.tabs, tab],
+          activeTabId: id,
+        };
+      });
+      return id;
+    },
+    [workDir]
+  );
 
   const removeTab = useCallback((tabId: string) => {
     setState((prev) => {
       const newTabs = prev.tabs.filter((t) => t.id !== tabId);
       let newActiveId = prev.activeTabId;
       if (prev.activeTabId === tabId) {
-        // Activate the previous tab, or the first remaining tab
         const removedIdx = prev.tabs.findIndex((t) => t.id === tabId);
         const fallback = newTabs[Math.max(0, removedIdx - 1)] || newTabs[0];
         newActiveId = fallback?.id || null;
@@ -286,7 +278,9 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
     setState((prev) => ({
       ...prev,
       tabs: prev.tabs.map((t) =>
-        t.id === tabId ? { ...t, sessionId, status: "connected" as const } : t
+        t.id === tabId
+          ? { ...t, sessionId, status: "connected" as const }
+          : t
       ),
     }));
   }, []);
@@ -295,17 +289,24 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
     setState((prev) => ({
       ...prev,
       tabs: prev.tabs.map((t) =>
-        t.id === tabId ? { ...t, status: "disconnected" as const, sessionId: null } : t
+        t.id === tabId
+          ? { ...t, status: "disconnected" as const, sessionId: null }
+          : t
       ),
     }));
   }, []);
 
-  const updateTabStatus = useCallback((tabId: string, status: TerminalTab["status"]) => {
-    setState((prev) => ({
-      ...prev,
-      tabs: prev.tabs.map((t) => (t.id === tabId ? { ...t, status } : t)),
-    }));
-  }, []);
+  const updateTabStatus = useCallback(
+    (tabId: string, status: TerminalTab["status"]) => {
+      setState((prev) => ({
+        ...prev,
+        tabs: prev.tabs.map((t) =>
+          t.id === tabId ? { ...t, status } : t
+        ),
+      }));
+    },
+    []
+  );
 
   const setTerminalHeight = useCallback((height: number) => {
     setState((prev) => ({ ...prev, terminalHeight: height }));
@@ -314,7 +315,9 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
   const renameTab = useCallback((tabId: string, label: string) => {
     setState((prev) => ({
       ...prev,
-      tabs: prev.tabs.map((t) => (t.id === tabId ? { ...t, label } : t)),
+      tabs: prev.tabs.map((t) =>
+        t.id === tabId ? { ...t, label } : t
+      ),
     }));
   }, []);
 
@@ -340,6 +343,7 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
 
 export function useTerminals() {
   const ctx = useContext(TerminalContext);
-  if (!ctx) throw new Error("useTerminals must be used within TerminalProvider");
+  if (!ctx)
+    throw new Error("useTerminals must be used within TerminalProvider");
   return ctx;
 }

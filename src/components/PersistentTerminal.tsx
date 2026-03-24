@@ -192,7 +192,7 @@ export function PersistentTerminal() {
         <ConnectAgentModal
           agent={agent}
           onClose={() => setShowConnectModal(false)}
-          onConnected={handleConnect}
+          onConnected={() => { handleConnect(); }}
         />
       )}
     </>

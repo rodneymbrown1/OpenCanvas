@@ -1,7 +1,7 @@
 "use client";
 
 import { Sidebar } from "@/components/Sidebar";
-import { PersistentTerminal } from "@/components/PersistentTerminal";
+import { TerminalPanel } from "@/components/TerminalPanel";
 import { usePathname } from "next/navigation";
 
 export function LayoutShell({ children }: { children: React.ReactNode }) {
@@ -17,7 +17,7 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
           {children}
         </main>
         {/* Terminal — always mounted, only visible on /workspace */}
-        <PersistentTerminal />
+        <TerminalPanel />
       </div>
     </>
   );

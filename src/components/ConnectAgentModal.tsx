@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { X, Check, Loader2, AlertCircle } from "lucide-react";
+import { X, Check, Loader2, AlertCircle, Terminal } from "lucide-react";
 
 type AgentType = "claude" | "codex" | "gemini";
 
@@ -13,9 +13,11 @@ interface AgentInfo {
 }
 
 interface ConnectAgentModalProps {
-  agent: AgentType;
+  /** Pre-selected agent, or null to let user pick */
+  agent?: AgentType | null;
   onClose: () => void;
-  onConnected: () => void;
+  /** Called with the selected agent when user clicks Connect */
+  onConnected: (agent: AgentType) => void;
 }
 
 const INSTALL_INSTRUCTIONS: Record<AgentType, string[]> = {
@@ -30,20 +32,21 @@ const INSTALL_INSTRUCTIONS: Record<AgentType, string[]> = {
     "Once ready, click Connect below",
   ],
   gemini: [
-    "Install Gemini CLI: npm install -g @anthropic-ai/gemini",
+    "Install Gemini CLI: npm install -g @google/gemini-cli",
     "Authenticate with your Google account",
     "Once authenticated, click Connect below",
   ],
 };
 
 export function ConnectAgentModal({
-  agent,
+  agent: initialAgent,
   onClose,
   onConnected,
 }: ConnectAgentModalProps) {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
+  const [selectedAgent, setSelectedAgent] = useState<AgentType>(initialAgent || "claude");
 
   useEffect(() => {
     fetch("/api/agents")
@@ -55,14 +58,13 @@ export function ConnectAgentModal({
       .catch(() => setLoading(false));
   }, []);
 
-  const currentAgent = agents.find((a) => a.id === agent);
+  const currentAgent = agents.find((a) => a.id === selectedAgent);
   const isInstalled = currentAgent?.installed ?? false;
 
   const handleConnect = () => {
     setConnecting(true);
-    // Signal to workspace to spawn the agent
     setTimeout(() => {
-      onConnected();
+      onConnected(selectedAgent);
     }, 500);
   };
 
@@ -75,8 +77,9 @@ export function ConnectAgentModal({
     >
       <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl w-[450px] max-w-[90vw] shadow-2xl">
         <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border)]">
-          <h2 className="text-sm font-semibold">
-            Connect {agent.charAt(0).toUpperCase() + agent.slice(1)}
+          <h2 className="text-sm font-semibold flex items-center gap-2">
+            <Terminal size={14} />
+            New Terminal
           </h2>
           <button
             onClick={onClose}
@@ -94,7 +97,36 @@ export function ConnectAgentModal({
             </div>
           ) : (
             <>
-              {/* Detection status */}
+              {/* Agent picker */}
+              <div className="space-y-2">
+                <p className="text-[10px] text-[var(--text-muted)] uppercase tracking-wide">
+                  Select Agent
+                </p>
+                <div className="grid grid-cols-3 gap-2">
+                  {agents.map((a) => (
+                    <button
+                      key={a.id}
+                      onClick={() => setSelectedAgent(a.id)}
+                      className={`flex flex-col items-center gap-1.5 px-3 py-3 rounded-lg border text-sm font-medium transition-colors ${
+                        selectedAgent === a.id
+                          ? "border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]"
+                          : "border-[var(--border)] bg-[var(--bg-primary)] text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:border-[var(--text-muted)]"
+                      }`}
+                    >
+                      <span>{a.label}</span>
+                      <span
+                        className={`text-[10px] ${
+                          a.installed ? "text-green-400" : "text-[var(--text-muted)]"
+                        }`}
+                      >
+                        {a.installed ? "Ready" : "Not found"}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Detection status for selected agent */}
               <div
                 className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm ${
                   isInstalled
@@ -110,7 +142,7 @@ export function ConnectAgentModal({
                 ) : (
                   <>
                     <AlertCircle size={16} />
-                    {agent.charAt(0).toUpperCase() + agent.slice(1)} not found
+                    {selectedAgent.charAt(0).toUpperCase() + selectedAgent.slice(1)} not found
                     on this system
                   </>
                 )}
@@ -123,36 +155,12 @@ export function ConnectAgentModal({
                     To get started:
                   </p>
                   <ol className="list-decimal list-inside space-y-1.5 text-xs text-[var(--text-secondary)]">
-                    {INSTALL_INSTRUCTIONS[agent].map((step, i) => (
+                    {INSTALL_INSTRUCTIONS[selectedAgent].map((step, i) => (
                       <li key={i}>{step}</li>
                     ))}
                   </ol>
                 </div>
               )}
-
-              {/* Detected agents summary */}
-              <div className="space-y-1.5">
-                <p className="text-[10px] text-[var(--text-muted)] uppercase tracking-wide">
-                  All Detected Agents
-                </p>
-                {agents.map((a) => (
-                  <div
-                    key={a.id}
-                    className="flex items-center justify-between px-3 py-1.5 rounded-md bg-[var(--bg-primary)] text-xs"
-                  >
-                    <span className="text-[var(--text-secondary)]">
-                      {a.label}
-                    </span>
-                    <span
-                      className={
-                        a.installed ? "text-green-400" : "text-[var(--text-muted)]"
-                      }
-                    >
-                      {a.installed ? "Installed" : "Not found"}
-                    </span>
-                  </div>
-                ))}
-              </div>
             </>
           )}
         </div>
@@ -173,7 +181,7 @@ export function ConnectAgentModal({
                 Connecting...
               </>
             ) : (
-              "Connect"
+              `Connect ${selectedAgent.charAt(0).toUpperCase() + selectedAgent.slice(1)}`
             )}
           </button>
         </div>
