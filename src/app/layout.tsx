@@ -4,6 +4,7 @@ import { SessionProvider } from "@/lib/SessionContext";
 import { ProjectProvider } from "@/lib/ProjectContext";
 import { TerminalProvider } from "@/lib/TerminalContext";
 import { ViewProvider } from "@/lib/ViewContext";
+import { CalendarProvider } from "@/lib/CalendarContext";
 import { CanvasShell } from "@/components/CanvasShell";
 
 export const metadata: Metadata = {
@@ -23,8 +24,10 @@ export default function RootLayout({
           <ProjectProvider>
             <TerminalProvider>
               <ViewProvider>
-                <CanvasShell />
-                {children}
+                <CalendarProvider>
+                  <CanvasShell />
+                  {children}
+                </CalendarProvider>
               </ViewProvider>
             </TerminalProvider>
           </ProjectProvider>

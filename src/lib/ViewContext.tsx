@@ -18,7 +18,8 @@ export type ViewId =
   | "settings"
   | "data"
   | "appify"
-  | "projects";
+  | "projects"
+  | "calendar";
 
 const VIEW_PATHS: Record<ViewId, string> = {
   workspace: "/workspace",
@@ -30,6 +31,7 @@ const VIEW_PATHS: Record<ViewId, string> = {
   data: "/data",
   appify: "/appify",
   projects: "/projects",
+  calendar: "/calendar",
 };
 
 const PATH_TO_VIEW: Record<string, ViewId> = Object.fromEntries(

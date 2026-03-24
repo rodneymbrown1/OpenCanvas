@@ -20,6 +20,7 @@ import {
   Square,
   Play,
 } from "lucide-react";
+import { CalendarAccordion } from "@/components/CalendarAccordion";
 
 interface ProjectEntry {
   name: string;
@@ -136,8 +137,14 @@ export default function ProjectsView() {
   const [newName, setNewName] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [createError, setCreateError] = useState("");
-  // Server status for non-current projects: path -> { running, port }
-  const [serverStatus, setServerStatus] = useState<Record<string, { running: boolean; port: number | null }>>({});
+  // Server status for non-current projects: path -> { running, port, services }
+  interface ProjectServiceStatus {
+    running: boolean;
+    port: number | null;
+    services: Record<string, { name: string; state: string; type?: string; port?: number }>;
+    hasRunConfig: boolean;
+  }
+  const [serverStatus, setServerStatus] = useState<Record<string, ProjectServiceStatus>>({});
   const [stoppingPaths, setStoppingPaths] = useState<Set<string>>(new Set());
 
   const fetchState = useCallback(async () => {
@@ -157,9 +164,33 @@ export default function ProjectsView() {
     if (!state?.projects.length) return;
 
     async function pollServerStatus() {
-      const statuses: Record<string, { running: boolean; port: number | null }> = {};
+      const statuses: Record<string, ProjectServiceStatus> = {};
       await Promise.all(
         state!.projects.map(async (project) => {
+          try {
+            // Try multi-service endpoint first
+            const svcRes = await fetch(`/api/services?cwd=${encodeURIComponent(project.path)}`);
+            if (svcRes.ok) {
+              const svcData = await svcRes.json();
+              const services = svcData.services || {};
+              const runningServices = Object.values(services).filter(
+                (s: unknown) => (s as { state: string }).state === "running"
+              );
+              const primaryPort = (Object.values(services).find(
+                (s: unknown) => (s as { state: string; port?: number }).state === "running" && (s as { port?: number }).port
+              ) as { port?: number } | undefined)?.port || null;
+
+              statuses[project.path] = {
+                running: runningServices.length > 0,
+                port: primaryPort,
+                services,
+                hasRunConfig: !!svcData.hasRunConfig,
+              };
+              return;
+            }
+          } catch {
+            // Fall through to legacy stack check
+          }
           try {
             const res = await fetch(`/api/stack?cwd=${encodeURIComponent(project.path)}`);
             if (res.ok) {
@@ -167,12 +198,14 @@ export default function ProjectsView() {
               statuses[project.path] = {
                 running: !!data.running,
                 port: data.session?.detectedPort || null,
+                services: {},
+                hasRunConfig: false,
               };
             } else {
-              statuses[project.path] = { running: false, port: null };
+              statuses[project.path] = { running: false, port: null, services: {}, hasRunConfig: false };
             }
           } catch {
-            statuses[project.path] = { running: false, port: null };
+            statuses[project.path] = { running: false, port: null, services: {}, hasRunConfig: false };
           }
         })
       );
@@ -186,6 +219,15 @@ export default function ProjectsView() {
 
   const handleStopServer = async (projectPath: string) => {
     setStoppingPaths((prev) => new Set(prev).add(projectPath));
+    // Stop multi-service sessions
+    try {
+      await fetch("/api/services?action=stop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cwd: projectPath }),
+      });
+    } catch {}
+    // Also stop legacy stack session
     try {
       await fetch("/api/stack?action=stop", {
         method: "POST",
@@ -201,7 +243,7 @@ export default function ProjectsView() {
     // Refresh server status
     setServerStatus((prev) => ({
       ...prev,
-      [projectPath]: { running: false, port: null },
+      [projectPath]: { running: false, port: null, services: {}, hasRunConfig: prev[projectPath]?.hasRunConfig ?? false },
     }));
   };
 
@@ -404,6 +446,9 @@ export default function ProjectsView() {
           <p className="text-[11px] font-mono text-[var(--text-muted)] mt-1 ml-5">{state.home}</p>
         </div>
 
+        {/* Calendar accordion */}
+        <CalendarAccordion />
+
         {/* Projects grid */}
         {state.projects.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -443,16 +488,69 @@ export default function ProjectsView() {
                             {new Date(project.lastOpened).toLocaleDateString()}
                           </p>
                         )}
-                        {/* Server status indicator */}
+                        {/* Server status indicator with service topology */}
                         {(() => {
-                          const port = isCurrent ? projectState.appPort : serverStatus[project.path]?.port;
-                          const running = isCurrent ? !!projectState.appPort : serverStatus[project.path]?.running;
+                          const status = isCurrent
+                            ? { running: !!projectState.appPort, port: projectState.appPort, services: projectState.services, hasRunConfig: projectState.runConfigExists }
+                            : serverStatus[project.path] || { running: false, port: null, services: {}, hasRunConfig: false };
                           const isStopping = stoppingPaths.has(project.path);
-                          if (running && port) {
+                          const serviceEntries = Object.values(status.services || {});
+                          const hasServices = serviceEntries.length > 0;
+                          const runningCount = serviceEntries.filter((s) => s.state === "running").length;
+
+                          if (hasServices && runningCount > 0) {
+                            return (
+                              <div className="flex flex-col gap-1 mt-1">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="flex items-center gap-1 text-[10px] font-mono text-green-400">
+                                    <Wifi size={10} /> {runningCount}/{serviceEntries.length} services
+                                  </span>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (isCurrent) stopApp();
+                                      else handleStopServer(project.path);
+                                    }}
+                                    disabled={isStopping}
+                                    className="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] text-[var(--text-muted)] hover:text-[var(--error)] border border-[var(--border)] transition-colors disabled:opacity-50"
+                                    title="Stop all services"
+                                  >
+                                    <Square size={8} /> {isStopping ? "Stopping..." : "Stop"}
+                                  </button>
+                                </div>
+                                <div className="flex flex-wrap gap-x-3 gap-y-0.5">
+                                  {serviceEntries.map((svc) => (
+                                    <span key={svc.name} className="flex items-center gap-1 text-[10px]">
+                                      <span className={`w-1.5 h-1.5 rounded-full ${
+                                        svc.state === "running" ? "bg-green-400" :
+                                        svc.state === "starting" ? "bg-yellow-400" :
+                                        "bg-[var(--text-muted)]"
+                                      }`} />
+                                      <span className="font-mono text-[var(--text-muted)]">{svc.name}</span>
+                                      {svc.port && <span className="font-mono text-[var(--text-muted)]">:{svc.port}</span>}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            );
+                          }
+
+                          if (hasServices && runningCount === 0) {
+                            return (
+                              <div className="flex flex-col gap-0.5 mt-1">
+                                <span className="flex items-center gap-1 text-[10px] text-[var(--text-muted)]">
+                                  <WifiOff size={10} /> {serviceEntries.length} service{serviceEntries.length !== 1 ? "s" : ""} configured
+                                </span>
+                              </div>
+                            );
+                          }
+
+                          // Legacy single-port display
+                          if (status.running && status.port) {
                             return (
                               <div className="flex items-center gap-1.5">
                                 <span className="flex items-center gap-1 text-[10px] font-mono text-green-400">
-                                  <Wifi size={10} /> :{port}
+                                  <Wifi size={10} /> :{status.port}
                                 </span>
                                 <button
                                   onClick={(e) => {
@@ -469,7 +567,7 @@ export default function ProjectsView() {
                               </div>
                             );
                           }
-                          if (running && !port) {
+                          if (status.running && !status.port) {
                             return (
                               <span className="flex items-center gap-1 text-[10px] text-yellow-400">
                                 <Wifi size={10} /> starting...

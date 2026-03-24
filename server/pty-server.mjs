@@ -31,6 +31,7 @@ import { parse } from "yaml";
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import pty from "@homebridge/node-pty-prebuilt-multiarch";
+import { initCronScheduler } from "./cron-scheduler.mjs";
 
 const CONFIG_PATH = join(process.cwd(), "open-canvas.yaml");
 
@@ -50,6 +51,7 @@ const AGENT_COMMANDS = {
   codex: { shell: "/bin/zsh", args: ["-l", "-c", "codex"] },
   gemini: { shell: "/bin/zsh", args: ["-l", "-c", "gemini"] },
   shell: { shell: process.env.SHELL || "/bin/zsh", args: [] },
+  calendar: { shell: "/bin/zsh", args: ["-l", "-c", "claude"] }, // calendar agent uses claude
 };
 
 // ── Session Store ──────────────────────────────────────────────────────────
@@ -365,6 +367,251 @@ const httpServer = http.createServer((req, res) => {
     return;
   }
 
+  // ── Multi-Service Endpoints ──────────────────────────────────────────────
+
+  // POST /services/start — start multiple named services in dependency order
+  if (req.url === "/services/start" && req.method === "POST") {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      try {
+        const { services, startOrder, cwd } = JSON.parse(body);
+        if (!services || !startOrder || !cwd) {
+          res.writeHead(400);
+          res.end(JSON.stringify({ error: "services, startOrder, and cwd required" }));
+          return;
+        }
+
+        const results = {};
+        let failed = false;
+
+        // Helper to spawn a single service
+        function spawnService(name, svcDef) {
+          return new Promise((resolve) => {
+            const serviceCwd = path.resolve(cwd, svcDef.cwd || ".");
+            const session = createSession("service", serviceCwd);
+            session.role = `service:${name}`;
+            session.serviceName = name;
+
+            const command = svcDef.command;
+            console.log(`[pty-server] service:${name} spawning: ${command} in ${serviceCwd}`);
+
+            const ptyProcess = pty.spawn("/bin/zsh", ["-l", "-c", command], {
+              name: "xterm-256color",
+              cols: 120,
+              rows: 30,
+              cwd: serviceCwd,
+              env: {
+                ...process.env,
+                ...svcDef.env,
+                TERM: "xterm-256color",
+                COLORTERM: "truecolor",
+              },
+            });
+
+            session.pid = ptyProcess.pid;
+            session.status = "running";
+
+            activeProcesses.set(session.id, {
+              ptyProcess,
+              clients: new Set(),
+              outputBuffer: [],
+            });
+
+            const readyPattern = svcDef.ready_pattern
+              ? new RegExp(svcDef.ready_pattern)
+              : null;
+            let resolved = false;
+
+            ptyProcess.onData((data) => {
+              session.outputBytes += Buffer.byteLength(data);
+              session.outputLines += (data.match(/\n/g) || []).length;
+              const clean = stripAnsi(data);
+              const lines = clean.split("\n").filter((l) => l.trim());
+              for (const line of lines) {
+                session.lastOutput.push(line.trim());
+                if (session.lastOutput.length > 30) session.lastOutput.shift();
+                if (!session.detectedPort) {
+                  const portMatch = line.match(/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d{4,5})/);
+                  if (portMatch) {
+                    const port = parseInt(portMatch[1], 10);
+                    if (port >= 3000 && port <= 65535) {
+                      session.detectedPort = port;
+                      console.log(`[pty-server] service:${name} detected port: ${port}`);
+                    }
+                  }
+                }
+                // Resolve when ready_pattern matches or port detected
+                if (!resolved && (
+                  (readyPattern && readyPattern.test(line)) ||
+                  session.detectedPort
+                )) {
+                  resolved = true;
+                  resolve({ name, session, status: "running" });
+                }
+              }
+              const proc = activeProcesses.get(session.id);
+              if (proc) {
+                proc.outputBuffer.push(data);
+                if (proc.outputBuffer.length > 200) proc.outputBuffer.shift();
+                for (const client of proc.clients) {
+                  if (client.readyState === client.OPEN) {
+                    client.send(JSON.stringify({ type: "output", data }));
+                  }
+                }
+              }
+            });
+
+            ptyProcess.onExit(({ exitCode }) => {
+              console.log(`[pty-server] service:${name} exited: code=${exitCode}`);
+              session.status = "completed";
+              session.exitCode = exitCode;
+              session.endedAt = new Date().toISOString();
+              if (!resolved) {
+                resolved = true;
+                resolve({ name, session, status: exitCode === 0 ? "completed" : "error" });
+              }
+            });
+
+            // Timeout: don't wait forever for ready_pattern — resolve after 15s regardless
+            setTimeout(() => {
+              if (!resolved) {
+                resolved = true;
+                console.log(`[pty-server] service:${name} ready timeout — proceeding`);
+                resolve({ name, session, status: "running" });
+              }
+            }, 15000);
+          });
+        }
+
+        // Start services in dependency order (sequentially)
+        async function startAll() {
+          for (const name of startOrder) {
+            const svcDef = services[name];
+            if (!svcDef) continue;
+
+            // Skip if already running for this cwd
+            let alreadyRunning = false;
+            for (const [, s] of sessions) {
+              if (s.role === `service:${name}` && s.cwd === path.resolve(cwd, svcDef.cwd || ".") && s.status === "running") {
+                results[name] = { name, sessionId: s.id, state: "running", port: s.detectedPort, pid: s.pid, alreadyRunning: true };
+                alreadyRunning = true;
+                break;
+              }
+            }
+            if (alreadyRunning) continue;
+
+            const result = await spawnService(name, svcDef);
+            results[name] = {
+              name,
+              sessionId: result.session.id,
+              state: result.status,
+              port: result.session.detectedPort,
+              pid: result.session.pid,
+            };
+            if (result.status === "error") {
+              failed = true;
+              break; // Stop starting dependents if a dependency failed
+            }
+          }
+        }
+
+        startAll().then(() => {
+          res.end(JSON.stringify({ services: results, failed }));
+        }).catch((err) => {
+          res.writeHead(500);
+          res.end(JSON.stringify({ error: err.message }));
+        });
+
+      } catch (err) {
+        res.writeHead(500);
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // POST /services/stop — stop all service sessions for a cwd, or a specific service
+  if (req.url === "/services/stop" && req.method === "POST") {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      try {
+        const { cwd, service: serviceName } = JSON.parse(body);
+        if (!cwd) {
+          res.writeHead(400);
+          res.end(JSON.stringify({ error: "cwd required" }));
+          return;
+        }
+
+        const stopped = [];
+        for (const [id, s] of sessions) {
+          if (s.status !== "running") continue;
+          if (!s.role?.startsWith("service:")) continue;
+
+          // Match by cwd (the service's resolved cwd starts with the project cwd)
+          const projectCwd = path.resolve(cwd);
+          const sessionCwd = path.resolve(s.cwd);
+          if (!sessionCwd.startsWith(projectCwd)) continue;
+
+          // If specific service requested, match name
+          if (serviceName && s.role !== `service:${serviceName}`) continue;
+
+          const proc = activeProcesses.get(id);
+          if (proc?.ptyProcess) {
+            console.log(`[pty-server] stopping ${s.role} session=${id} pid=${s.pid}`);
+            proc.ptyProcess.kill();
+            s.status = "completed";
+            s.endedAt = new Date().toISOString();
+            stopped.push({ name: s.serviceName || s.role, sessionId: id });
+          }
+        }
+
+        res.end(JSON.stringify({ stopped, count: stopped.length }));
+      } catch (err) {
+        res.writeHead(500);
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // GET /services/status?cwd=... — get status of all service sessions for a project
+  if (req.url?.startsWith("/services/status") && req.method === "GET") {
+    const url = new URL(req.url, `http://localhost:${PORT}`);
+    const cwd = url.searchParams.get("cwd");
+
+    if (!cwd) {
+      res.writeHead(400);
+      res.end(JSON.stringify({ error: "cwd required" }));
+      return;
+    }
+
+    const projectCwd = path.resolve(cwd);
+    const services = {};
+
+    for (const [, s] of sessions) {
+      if (!s.role?.startsWith("service:")) continue;
+      const sessionCwd = path.resolve(s.cwd);
+      if (!sessionCwd.startsWith(projectCwd)) continue;
+
+      const name = s.serviceName || s.role.replace("service:", "");
+      // Only report the most recent session per service name
+      if (!services[name] || new Date(s.startedAt) > new Date(services[name].startedAt)) {
+        services[name] = {
+          name,
+          state: s.status === "running" ? "running" : s.status === "starting" ? "starting" : "stopped",
+          port: s.detectedPort,
+          pid: s.pid,
+          sessionId: s.id,
+        };
+      }
+    }
+
+    res.end(JSON.stringify({ services }));
+    return;
+  }
+
   // POST /sessions/:id/input — send input to a running session
   const inputMatch = req.url?.match(/^\/sessions\/(.+)\/input$/);
   if (inputMatch && req.method === "POST") {
@@ -661,4 +908,44 @@ wss.on("connection", (ws) => {
 
 httpServer.listen(PORT, () => {
   console.log(`[pty-server] listening on http://localhost:${PORT} (HTTP + WebSocket)`);
+
+  // Initialize cron scheduler for calendar events
+  initCronScheduler((opts) => {
+    // Callback to spawn a PTY session when a cron job fires a "prompt" action
+    console.log(`[pty-server] cron spawning session: agent=${opts.agent}, cwd=${opts.cwd}`);
+    const session = createSession(opts.agent, opts.cwd);
+    session.role = "cron";
+    const agentCmd = AGENT_COMMANDS[opts.agent] || AGENT_COMMANDS.claude;
+    const ptyProcess = pty.spawn(agentCmd.shell, agentCmd.args, {
+      name: "xterm-256color",
+      cols: 120,
+      rows: 30,
+      cwd: opts.cwd,
+      env: { ...process.env, TERM: "xterm-256color" },
+    });
+    session.pid = ptyProcess.pid;
+    session.status = "running";
+    // Send the prompt after a short delay to let the agent initialize
+    setTimeout(() => {
+      if (opts.prompt) {
+        ptyProcess.write(opts.prompt + "\r");
+      }
+    }, 3000);
+    ptyProcess.onData((data) => {
+      session.outputBytes += data.length;
+      session.outputLines += (data.match(/\n/g) || []).length;
+      const clean = stripAnsi(data);
+      if (clean.trim()) {
+        session.lastOutput.push(...clean.split("\n").filter(Boolean));
+        if (session.lastOutput.length > 20) {
+          session.lastOutput = session.lastOutput.slice(-20);
+        }
+      }
+    });
+    ptyProcess.onExit(({ exitCode }) => {
+      session.status = "exited";
+      session.exitCode = exitCode;
+      session.endedAt = new Date().toISOString();
+    });
+  });
 });

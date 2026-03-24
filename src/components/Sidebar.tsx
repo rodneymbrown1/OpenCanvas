@@ -10,9 +10,11 @@ import {
   Sun,
   Moon,
   Database,
+  CalendarDays,
 } from "lucide-react";
 import { useTheme } from "@/lib/useTheme";
 import { useView, type ViewId } from "@/lib/ViewContext";
+import { CalendarNotifications } from "@/components/CalendarNotifications";
 
 const NAV_ITEMS: { id: ViewId; icon: typeof FolderOpen; label: string }[] = [
   { id: "workspace", icon: FolderOpen, label: "Workspace" },
@@ -20,6 +22,7 @@ const NAV_ITEMS: { id: ViewId; icon: typeof FolderOpen; label: string }[] = [
   { id: "usage", icon: DollarSign, label: "Usage" },
   { id: "ports", icon: Wifi, label: "Ports" },
   { id: "data", icon: Database, label: "Data" },
+  { id: "calendar", icon: CalendarDays, label: "Calendar" },
   { id: "settings", icon: Settings, label: "Settings" },
 ];
 
@@ -68,6 +71,8 @@ export function Sidebar() {
       })}
 
       <div className="flex-1" />
+
+      <CalendarNotifications />
 
       <button
         onClick={toggleTheme}
