@@ -23,8 +23,36 @@ import {
   Square,
 } from "lucide-react";
 
+function ServiceStatusList({ services }: { services: Record<string, { name: string; state: string; type?: string; port?: number }> }) {
+  const entries = Object.values(services);
+  if (entries.length === 0) return null;
+
+  return (
+    <div className="bg-[var(--bg-secondary)] rounded-lg border border-[var(--border)] p-3 text-left max-w-md">
+      <p className="text-[10px] text-[var(--text-muted)] mb-1.5 uppercase tracking-wider">Services</p>
+      <div className="space-y-1">
+        {entries.map((svc) => (
+          <div key={svc.name} className="flex items-center gap-2 text-xs">
+            <span className={`w-1.5 h-1.5 rounded-full ${
+              svc.state === "running" ? "bg-green-400" :
+              svc.state === "starting" ? "bg-yellow-400 animate-pulse" :
+              svc.state === "error" ? "bg-red-400" :
+              "bg-[var(--text-muted)]"
+            }`} />
+            <span className="font-mono text-[var(--text-secondary)]">{svc.name}</span>
+            {svc.type && <span className="text-[10px] text-[var(--text-muted)]">({svc.type})</span>}
+            {svc.port && <span className="text-[10px] font-mono text-[var(--text-muted)]">:{svc.port}</span>}
+            <span className="text-[10px] text-[var(--text-muted)]">{svc.state}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function AppControls() {
   const { state: project, startApp, stopApp } = useProject();
+  const hasServices = Object.keys(project.services).length > 0;
 
   if (project.appStatus === "building" || project.appStatus === "initializing") {
     return (
@@ -33,11 +61,12 @@ function AppControls() {
           <Loader2 size={14} className="animate-spin" />
           <span>
             {project.appStatus === "initializing"
-              ? "Asking agent to start the dev server..."
-              : "Starting app..."}
+              ? "Detecting services..."
+              : "Starting services..."}
           </span>
         </div>
-        {project.startupLog.length > 0 && (
+        {hasServices && <ServiceStatusList services={project.services} />}
+        {!hasServices && project.startupLog.length > 0 && (
           <div className="bg-[var(--bg-secondary)] rounded-lg border border-[var(--border)] p-3 text-left">
             <pre className="text-[10px] leading-relaxed text-[var(--text-muted)] font-mono whitespace-pre-wrap max-h-32 overflow-y-auto">
               {project.startupLog.slice(-10).join("\n")}
@@ -77,13 +106,18 @@ function AppControls() {
   }
 
   return (
-    <button
-      onClick={startApp}
-      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-medium hover:opacity-90 transition-opacity"
-    >
-      <Play size={14} />
-      Run App
-    </button>
+    <div className="space-y-3">
+      <button
+        onClick={startApp}
+        className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-medium hover:opacity-90 transition-opacity"
+      >
+        <Play size={14} />
+        Run App
+      </button>
+      {project.runConfigExists && hasServices && (
+        <ServiceStatusList services={project.services} />
+      )}
+    </div>
   );
 }
 

@@ -1,6 +1,10 @@
 import { readGlobalConfig } from "@/lib/globalConfig";
 import { readProjectConfig, type OpenCanvasConfig } from "@/lib/config";
 
+// New class-based managers — available for direct use
+export { GlobalConfigManager } from "@/lib/core/GlobalConfigManager";
+export { ProjectConfigManager } from "@/lib/core/ProjectConfigManager";
+
 /**
  * Resolve the effective configuration for a project by merging:
  * 1. Hardcoded defaults

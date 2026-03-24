@@ -29,18 +29,32 @@ export interface DataFileEntry {
   size?: number;
 }
 
+export interface ServiceStatusInfo {
+  name: string;
+  state: "stopped" | "starting" | "running" | "error" | "stopping";
+  type?: string;
+  port?: number;
+  pid?: number;
+  sessionId?: string;
+}
+
 interface ProjectState {
   // Data pipeline
   pipelinePhase: PipelinePhase;
   dataFiles: DataFileEntry[];
 
-  // App preview
+  // App preview (backward compatible — maps to primary web service)
   appPort: number | null;
   appStatus: AppStatus;
   stackSessionId: string | null;
   detectedPorts: PortInfo[];
   startupLog: string[];
   iframeKey: number;
+
+  // Multi-service state
+  services: Record<string, ServiceStatusInfo>;
+  runConfigExists: boolean;
+  startOrder: string[];
 }
 
 interface ProjectContextType {
@@ -62,7 +76,7 @@ const RESERVED_PORTS = new Set([3000, 3001]);
 export function ProjectProvider({ children }: { children: ReactNode }) {
   const { session } = useSession();
 
-  const [state, setState] = useState<ProjectState>({
+  const initialState: ProjectState = {
     pipelinePhase: "idle",
     dataFiles: [],
     appPort: null,
@@ -71,7 +85,12 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     detectedPorts: [],
     startupLog: [],
     iframeKey: 0,
-  });
+    services: {},
+    runConfigExists: false,
+    startOrder: [],
+  };
+
+  const [state, setState] = useState<ProjectState>(initialState);
 
   // Baseline ports snapshot (taken on mount)
   const baselinePortsRef = useRef<Set<number>>(new Set());
@@ -84,16 +103,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (prevWorkDirRef.current && prevWorkDirRef.current !== session.workDir) {
-      setState({
-        pipelinePhase: "idle",
-        dataFiles: [],
-        appPort: null,
-        appStatus: "idle",
-        stackSessionId: null,
-        detectedPorts: [],
-        startupLog: [],
-        iframeKey: 0,
-      });
+      setState({ ...initialState });
       baselinePortsRef.current = new Set();
       baselineTakenRef.current = false;
       candidatePortRef.current = null;
@@ -147,6 +157,67 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
 
     pollStack();
     const interval = setInterval(pollStack, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [session.workDir]);
+
+  // ── Multi-service status polling ────────────────────────────────────────
+
+  useEffect(() => {
+    if (!session.workDir) return;
+    let cancelled = false;
+
+    async function pollServices() {
+      try {
+        const res = await fetch(`/api/services?cwd=${encodeURIComponent(session.workDir)}`);
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+
+        setState((prev) => {
+          const services = (data.services || {}) as Record<string, ServiceStatusInfo>;
+          const hasRunConfig = !!data.hasRunConfig;
+          const startOrder = data.startOrder || [];
+
+          // Find the primary port from the first running "web" service
+          let primaryPort: number | null = prev.appPort;
+          if (hasRunConfig && Object.keys(services).length > 0) {
+            const webService = Object.values(services).find(
+              (s) => s.type === "web" && s.state === "running" && s.port
+            );
+            if (webService?.port && !prev.appPort) {
+              primaryPort = webService.port;
+            }
+            // If any service is running, override appStatus
+            const anyRunning = Object.values(services).some((s) => s.state === "running");
+            if (anyRunning && prev.appStatus !== "running") {
+              return {
+                ...prev,
+                services,
+                runConfigExists: hasRunConfig,
+                startOrder,
+                appPort: primaryPort,
+                appStatus: "running",
+              };
+            }
+          }
+
+          return {
+            ...prev,
+            services,
+            runConfigExists: hasRunConfig,
+            startOrder,
+            appPort: primaryPort ?? prev.appPort,
+          };
+        });
+      } catch {
+        // /api/services not available — ignore
+      }
+    }
+
+    pollServices();
+    const interval = setInterval(pollServices, 3000);
     return () => {
       cancelled = true;
       clearInterval(interval);
@@ -249,7 +320,63 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   const startApp = useCallback(async () => {
     if (!session.workDir || !session.agent) return;
     setState((prev) => ({ ...prev, appStatus: "initializing", startupLog: [] }));
+
     try {
+      // Phase 1: Check if run-config.yaml exists
+      const configRes = await fetch(`/api/run-config?cwd=${encodeURIComponent(session.workDir)}`);
+      const configData = configRes.ok ? await configRes.json() : { exists: false };
+
+      // If no run-config, try auto-detect first
+      if (!configData.exists) {
+        const detectRes = await fetch("/api/run-config?action=detect", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cwd: session.workDir }),
+        });
+        const detectData = detectRes.ok ? await detectRes.json() : { servicesFound: 0 };
+
+        if (detectData.servicesFound > 0) {
+          // Auto-detect succeeded — now start via services API
+          configData.exists = true;
+        }
+      }
+
+      // Phase 2: If run-config exists, use multi-service start
+      if (configData.exists) {
+        setState((prev) => ({ ...prev, appStatus: "building", startupLog: ["Starting services..."] }));
+        const svcRes = await fetch("/api/services?action=start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cwd: session.workDir }),
+        });
+        const svcData = await svcRes.json();
+
+        if (svcData.error) {
+          console.error("[startApp] service start error:", svcData.error);
+          // Fall through to legacy stack start
+        } else {
+          const services = svcData.services || {};
+          const anyRunning = Object.values(services).some(
+            (s: unknown) => (s as ServiceStatusInfo).state === "running"
+          );
+          const webService = Object.values(services).find(
+            (s: unknown) => (s as ServiceStatusInfo).port
+          ) as ServiceStatusInfo | undefined;
+
+          setState((prev) => ({
+            ...prev,
+            services: services as Record<string, ServiceStatusInfo>,
+            appStatus: anyRunning ? "running" : "building",
+            appPort: webService?.port || prev.appPort,
+            startupLog: Object.entries(services).map(
+              ([name, s]) => `${name}: ${(s as ServiceStatusInfo).state}${(s as ServiceStatusInfo).port ? ` :${(s as ServiceStatusInfo).port}` : ""}`
+            ),
+          }));
+          return; // Done — service polling will track ongoing status
+        }
+      }
+
+      // Phase 3: Legacy fallback — use old stack start (agent discovery)
       const res = await fetch("/api/stack?action=start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -289,6 +416,17 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
 
   const stopApp = useCallback(async () => {
     if (!session.workDir) return;
+    // Stop services (multi-service)
+    try {
+      await fetch("/api/services?action=stop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cwd: session.workDir }),
+      });
+    } catch {
+      // ignore
+    }
+    // Also stop legacy stack session
     try {
       await fetch("/api/stack?action=stop", {
         method: "POST",
@@ -304,6 +442,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       appStatus: "idle",
       stackSessionId: null,
       startupLog: [],
+      services: {},
     }));
     candidatePortRef.current = null;
   }, [session.workDir]);

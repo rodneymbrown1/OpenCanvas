@@ -11,6 +11,8 @@ import {
   listSharedData,
   OC_HOME,
 } from "@/lib/globalConfig";
+import { RunConfigManager } from "@/lib/core/RunConfigManager";
+import { SkillsManager } from "@/lib/core/SkillsManager";
 
 // GET /api/projects — list projects + global config status
 export async function GET() {
@@ -83,6 +85,16 @@ export async function POST(req: NextRequest) {
     // Create project directory with standard structure
     fs.mkdirSync(path.join(projectPath, "data"), { recursive: true });
     fs.mkdirSync(path.join(projectPath, "apps"), { recursive: true });
+
+    // Auto-generate run-config.yaml skeleton
+    const runConfigMgr = new RunConfigManager(projectPath);
+    if (!runConfigMgr.exists()) {
+      runConfigMgr.write(runConfigMgr.getDefaults());
+    }
+
+    // Auto-generate .open-canvas/PROJECT.md and skills.md
+    const skillsMgr = new SkillsManager("project", projectPath);
+    skillsMgr.ensureFiles();
 
     // Register in global config
     const entry = registerProject(projectPath, body.name);
