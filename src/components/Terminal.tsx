@@ -324,7 +324,7 @@ export function AgentTerminal({
   }, []);
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full w-full overflow-hidden">
       <div className="flex items-center justify-between px-3 py-1.5 bg-[var(--bg-secondary)] border-b border-[var(--border)]">
         <div className="flex items-center gap-2">
           <span className="text-xs font-medium text-[var(--text-secondary)]">
@@ -343,7 +343,7 @@ export function AgentTerminal({
           </span>
         </div>
       </div>
-      <div ref={containerRef} className="flex-1 bg-[var(--bg-primary)]" />
+      <div ref={containerRef} className="flex-1 w-full overflow-hidden bg-[var(--bg-primary)]" />
     </div>
   );
 }

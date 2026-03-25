@@ -1,4 +1,5 @@
 
+import { useState, useRef, useEffect } from "react";
 import { X, Plus, Terminal } from "lucide-react";
 import { useTerminals } from "@/lib/TerminalContext";
 import type { TerminalTab } from "@/lib/types/terminal";
@@ -18,6 +19,65 @@ function statusColor(status: TerminalTab["status"]): string {
 
 interface TerminalTabBarProps {
   onAddClicked?: () => void;
+}
+
+function EditableTabLabel({ tab }: { tab: TerminalTab }) {
+  const { renameTab } = useTerminals();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(tab.label);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editing]);
+
+  const commit = () => {
+    const trimmed = draft.trim();
+    if (trimmed && trimmed !== tab.label) {
+      renameTab(tab.id, trimmed);
+    } else {
+      setDraft(tab.label);
+    }
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit();
+          if (e.key === "Escape") {
+            setDraft(tab.label);
+            setEditing(false);
+          }
+        }}
+        onClick={(e) => e.stopPropagation()}
+        className="bg-transparent border-none outline-none text-xs w-full min-w-[40px] max-w-[140px] text-[var(--text-primary)] selection:bg-[var(--accent)]/30"
+        style={{ padding: 0, margin: 0, lineHeight: "inherit" }}
+      />
+    );
+  }
+
+  return (
+    <span
+      className="truncate max-w-[140px] cursor-text"
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        setDraft(tab.label);
+        setEditing(true);
+      }}
+      title="Double-click to rename"
+    >
+      {tab.label}
+    </span>
+  );
 }
 
 export function TerminalTabBar({ onAddClicked }: TerminalTabBarProps) {
@@ -44,7 +104,7 @@ export function TerminalTabBar({ onAddClicked }: TerminalTabBarProps) {
         >
           <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusColor(tab.status)}`} />
           <Terminal size={11} className="shrink-0 opacity-60" />
-          <span className="truncate max-w-[100px]">{tab.label}</span>
+          <EditableTabLabel tab={tab} />
           <span
             onClick={(e) => handleCloseTab(e, tab.id)}
             className="ml-1 opacity-0 group-hover:opacity-100 hover:text-[var(--error)] transition-opacity shrink-0"

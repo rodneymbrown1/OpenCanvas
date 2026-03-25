@@ -162,7 +162,7 @@ export function TerminalPanel() {
   return (
     <>
       <div
-        className={`flex flex-col shrink-0 ${isDragging ? "select-none" : ""}`}
+        className={`flex flex-col shrink-0 w-full overflow-hidden ${isDragging ? "select-none" : ""}`}
         style={{ display: isWorkspace ? "flex" : "none" }}
       >
         {/* Resize handle */}
@@ -179,7 +179,7 @@ export function TerminalPanel() {
         {/* Terminal content area */}
         <div
           style={{ height: terminalHeight }}
-          className="min-h-[120px] shrink-0 relative"
+          className="min-h-[120px] shrink-0 relative w-full overflow-hidden"
         >
           {tabs.length === 0 ? (
             /* Empty state: no tabs */
