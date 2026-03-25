@@ -32,7 +32,7 @@ server:
 preferences:
   persist_jobs: true
   default_stack: nextjs-tailwind
-  theme: light
+  theme: dark
 session:
   lastSessionId: 08dd3362
   lastAgent: gemini
