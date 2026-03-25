@@ -1,0 +1,214 @@
+import { useState, useRef, useCallback, useEffect } from "react";
+import { Mic, Loader2 } from "lucide-react";
+import SpeechToElementImport from "speech-to-element";
+
+// Handle CJS default export interop — Vite dev may wrap it as { default: class }
+const SpeechToElement =
+  (SpeechToElementImport as any).default || SpeechToElementImport;
+import { useJobs } from "@/lib/JobsContext";
+import { useView } from "@/lib/ViewContext";
+
+export function SpeechToTextButton() {
+  const { spawnVoiceJob, spawning, activeJobs } = useJobs();
+  const { view } = useView();
+  const [isRecording, setIsRecording] = useState(false);
+  const [transcript, setTranscript] = useState("");
+  const [showPreview, setShowPreview] = useState(false);
+  const [targetSessionId, setTargetSessionId] = useState<string | null>(null);
+  const textRef = useRef<HTMLDivElement>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
+
+  // Close preview on outside click
+  useEffect(() => {
+    if (!showPreview) return;
+    const handler = (e: MouseEvent) => {
+      if (previewRef.current && !previewRef.current.contains(e.target as Node)) {
+        setShowPreview(false);
+        if (isRecording) {
+          SpeechToElement.stop();
+          setIsRecording(false);
+        }
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [showPreview, isRecording]);
+
+  // Reset target session when switching away from jobs
+  useEffect(() => {
+    if (view !== "jobs") {
+      setTargetSessionId(null);
+    }
+  }, [view]);
+
+  const handleToggle = useCallback(() => {
+    if (isRecording) {
+      // Stop recording and submit
+      SpeechToElement.stop();
+      setIsRecording(false);
+
+      const text = textRef.current?.textContent?.trim() || "";
+      if (text) {
+        setTranscript(text);
+        spawnVoiceJob(text, view, targetSessionId || undefined);
+        setTimeout(() => {
+          if (textRef.current) textRef.current.textContent = "";
+          setTranscript("");
+          setShowPreview(false);
+          setTargetSessionId(null);
+        }, 1500);
+      } else {
+        setShowPreview(false);
+      }
+    } else {
+      // Start recording immediately
+      setShowPreview(true);
+      setTranscript("");
+      if (textRef.current) textRef.current.textContent = "";
+
+      setTimeout(() => {
+        SpeechToElement.toggle("webspeech", {
+          element: textRef.current!,
+          displayInterimResults: true,
+          textColor: {
+            interim: "var(--text-muted)",
+            final: "var(--text-primary)",
+          },
+          onStart: () => {
+            setIsRecording(true);
+          },
+          onStop: () => {
+            setIsRecording(false);
+          },
+          onResult: (text: string) => {
+            setTranscript(text);
+          },
+          onError: () => {
+            setIsRecording(false);
+            setShowPreview(false);
+          },
+        });
+      }, 100);
+    }
+  }, [isRecording, spawnVoiceJob, view, targetSessionId]);
+
+  // Tab label for context display
+  const tabLabel =
+    view === "workspace" ? "Workspace" :
+    view === "calendar" ? "Calendar" :
+    view === "ports" ? "Ports" :
+    view === "data" ? "Data" :
+    view === "projects" ? "Projects" :
+    view === "jobs" ? "Jobs" :
+    view === "settings" ? "Settings" :
+    view === "usage" ? "Usage" :
+    view;
+
+  return (
+    <div className="relative" ref={previewRef}>
+      {/* Mic button in sidebar */}
+      <button
+        onClick={handleToggle}
+        disabled={spawning}
+        className={`w-10 h-10 rounded-lg flex items-center justify-center transition-all ${
+          isRecording
+            ? "recording-glow text-red-400"
+            : spawning
+              ? "text-[var(--text-muted)] opacity-50"
+              : "text-[var(--text-muted)] hover:text-[var(--accent)] hover:bg-[var(--bg-tertiary)]"
+        }`}
+        title={
+          isRecording
+            ? "Click to stop & submit"
+            : spawning
+              ? "Spawning job..."
+              : "Record"
+        }
+      >
+        {spawning ? (
+          <Loader2 size={18} className="animate-spin" />
+        ) : (
+          <Mic size={18} />
+        )}
+      </button>
+
+      {/* Recording popup */}
+      {showPreview && (
+        <div className="absolute bottom-full left-0 mb-2 w-80 bg-[var(--bg-secondary)] border border-[var(--border)] rounded-lg shadow-lg z-50 overflow-hidden">
+          {/* Context badge */}
+          <div className="px-3 py-2 border-b border-[var(--border)] flex items-center justify-between">
+            <span className="text-[10px] font-medium text-[var(--text-muted)] uppercase tracking-wider">
+              {tabLabel}
+            </span>
+            {view === "jobs" && activeJobs.length > 0 && (
+              <select
+                value={targetSessionId || ""}
+                onChange={(e) => setTargetSessionId(e.target.value || null)}
+                className="text-[10px] bg-[var(--bg-tertiary)] text-[var(--text-secondary)] border border-[var(--border)] rounded px-1.5 py-0.5 outline-none"
+              >
+                <option value="">New session</option>
+                {activeJobs.map((job) => (
+                  <option key={job.id} value={job.id}>
+                    {job.id.substring(0, 8)}... ({job.agent})
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          {/* Recording state */}
+          <div className="flex flex-col items-center gap-3 px-4 py-5">
+            {isRecording ? (
+              <>
+                {/* Large red glowing mic */}
+                <button
+                  onClick={handleToggle}
+                  className="recording-glow w-16 h-16 rounded-full bg-red-500/20 flex items-center justify-center transition-all hover:bg-red-500/30"
+                >
+                  <Mic size={32} className="text-red-400" />
+                </button>
+                <span className="text-sm font-semibold text-red-400">
+                  Recording
+                </span>
+              </>
+            ) : transcript ? (
+              <>
+                <Loader2 size={24} className="text-[var(--accent)] animate-spin" />
+                <span className="text-xs text-[var(--accent)]">
+                  Submitting...
+                </span>
+              </>
+            ) : (
+              <>
+                <div className="w-16 h-16 rounded-full bg-[var(--bg-tertiary)] flex items-center justify-center">
+                  <Loader2 size={24} className="text-[var(--text-muted)] animate-spin" />
+                </div>
+                <span className="text-xs text-[var(--text-muted)]">
+                  Starting...
+                </span>
+              </>
+            )}
+          </div>
+
+          {/* Live transcript */}
+          <div className="px-4 pb-3 min-h-[24px]">
+            <div
+              ref={textRef}
+              className="text-sm text-[var(--text-primary)] leading-relaxed text-center"
+              style={{ minHeight: "1.2em" }}
+            />
+          </div>
+
+          {/* Stop hint */}
+          {isRecording && (
+            <div className="px-3 py-1.5 border-t border-[var(--border)] bg-[var(--bg-tertiary)]/50">
+              <p className="text-[10px] text-[var(--text-muted)] text-center">
+                Click the mic to stop & submit
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
