@@ -14,8 +14,7 @@
 
 ```bash
 git clone https://github.com/rodneymbrown1/OpenCanvas.git && cd OpenCanvas
-npm install
-npm run open-canvas
+bash run.sh
 ```
 
 Opens at [localhost:3000](http://localhost:3000). Select a folder, connect your agent, start building.
