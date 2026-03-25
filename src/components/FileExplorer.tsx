@@ -17,6 +17,7 @@ import {
   Link2,
   Database,
   Pencil,
+  GitBranch,
 } from "lucide-react";
 
 interface FileEntry {
@@ -434,6 +435,10 @@ export function FileExplorer({ onFilePreview, rootDir, dragMode, onLinkDrop, onO
   const [creatingIn, setCreatingIn] = useState<CreatingState | null>(null);
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [rootDrop, setRootDrop] = useState(false);
+  const [gitCloneTarget, setGitCloneTarget] = useState<string | null>(null);
+  const [gitCloneUrl, setGitCloneUrl] = useState("");
+  const [gitCloning, setGitCloning] = useState(false);
+  const [gitCloneError, setGitCloneError] = useState("");
 
   // Persistent expanded state — survives tree refreshes
   const expandedPathsRef = useRef<Set<string>>(new Set());
@@ -555,6 +560,33 @@ export function FileExplorer({ onFilePreview, rootDir, dragMode, onLinkDrop, onO
     await fetch("/api/files/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path }) });
     if (selectedPath === path) setSelectedPath(null);
     fetchTree();
+  };
+
+  const handleGitClone = async () => {
+    if (!gitCloneTarget || !gitCloneUrl.trim()) return;
+    setGitCloning(true);
+    setGitCloneError("");
+    try {
+      const resp = await fetch("/api/files/git-clone", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: gitCloneUrl.trim(), targetDir: gitCloneTarget }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        setGitCloneError(data.error || "Clone failed");
+        return;
+      }
+      setGitCloneTarget(null);
+      setGitCloneUrl("");
+      expandedPathsRef.current.add(gitCloneTarget);
+      setExpandedVersion((v) => v + 1);
+      fetchTree();
+    } catch (err) {
+      setGitCloneError(err instanceof Error ? err.message : "Clone failed");
+    } finally {
+      setGitCloning(false);
+    }
   };
 
   const handleInternalDrop = useCallback(async (source: string, targetDir: string) => {
@@ -830,6 +862,7 @@ export function FileExplorer({ onFilePreview, rootDir, dragMode, onLinkDrop, onO
               <>
                 <button onClick={() => { setSelectedPath(contextMenu.entry.path); setCreatingIn({ dir: contextMenu.entry.path, type: "file" }); expandedPathsRef.current.add(contextMenu.entry.path); setExpandedVersion((v) => v + 1); setContextMenu(null); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"><FilePlus size={13} /> New File Here</button>
                 <button onClick={() => { setSelectedPath(contextMenu.entry.path); setCreatingIn({ dir: contextMenu.entry.path, type: "folder" }); expandedPathsRef.current.add(contextMenu.entry.path); setExpandedVersion((v) => v + 1); setContextMenu(null); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"><FolderPlus size={13} /> New Folder Here</button>
+                <button onClick={() => { setGitCloneTarget(contextMenu.entry.path); setGitCloneUrl(""); setGitCloneError(""); setContextMenu(null); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"><GitBranch size={13} /> Git Clone</button>
               </>
             )}
             {!readOnly && (
@@ -846,6 +879,45 @@ export function FileExplorer({ onFilePreview, rootDir, dragMode, onLinkDrop, onO
                 <button onClick={() => { handleDelete(contextMenu.entry.path); setContextMenu(null); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[var(--error)] hover:bg-[var(--bg-tertiary)]"><Trash2 size={13} /> Delete</button>
               </>
             )}
+          </div>
+        )}
+
+        {gitCloneTarget && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => { if (!gitCloning) { setGitCloneTarget(null); setGitCloneUrl(""); setGitCloneError(""); } }}>
+            <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-lg shadow-xl p-4 w-[400px] max-w-[90vw]" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center gap-2 mb-3">
+                <GitBranch size={16} className="text-[var(--accent)]" />
+                <span className="text-sm font-medium text-[var(--text-primary)]">Git Clone</span>
+              </div>
+              <p className="text-xs text-[var(--text-muted)] mb-3">
+                Clone into: <span className="text-[var(--text-secondary)]">{gitCloneTarget.split("/").pop()}/</span>
+              </p>
+              <input
+                autoFocus
+                type="text"
+                placeholder="https://github.com/user/repo.git"
+                value={gitCloneUrl}
+                onChange={(e) => { setGitCloneUrl(e.target.value); setGitCloneError(""); }}
+                onKeyDown={(e) => { if (e.key === "Enter" && gitCloneUrl.trim()) handleGitClone(); if (e.key === "Escape" && !gitCloning) { setGitCloneTarget(null); setGitCloneUrl(""); setGitCloneError(""); } }}
+                disabled={gitCloning}
+                className="w-full px-3 py-2 text-xs rounded border border-[var(--border)] bg-[var(--bg-primary)] text-[var(--text-primary)] placeholder:text-[var(--text-muted)] outline-none focus:border-[var(--accent)] disabled:opacity-50"
+              />
+              {gitCloneError && (
+                <p className="text-xs text-[var(--error)] mt-2">{gitCloneError}</p>
+              )}
+              <div className="flex justify-end gap-2 mt-3">
+                <button
+                  onClick={() => { setGitCloneTarget(null); setGitCloneUrl(""); setGitCloneError(""); }}
+                  disabled={gitCloning}
+                  className="px-3 py-1.5 text-xs rounded border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] disabled:opacity-50"
+                >Cancel</button>
+                <button
+                  onClick={handleGitClone}
+                  disabled={gitCloning || !gitCloneUrl.trim()}
+                  className="px-3 py-1.5 text-xs rounded bg-[var(--accent)] text-white hover:opacity-90 disabled:opacity-50"
+                >{gitCloning ? "Cloning..." : "Clone"}</button>
+              </div>
+            </div>
           </div>
         )}
       </div>

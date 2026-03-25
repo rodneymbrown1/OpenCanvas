@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { execFileSync } from "child_process";
+import { execFileSync, execFile } from "child_process";
 import { readConfig } from "../../src/lib/config.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -170,6 +170,11 @@ export function handle(req, res, url) {
   // POST /api/files/link
   if (p === "/api/files/link" && m === "POST") {
     handleLinkFile(req, res, url);
+    return true;
+  }
+  // POST /api/files/git-clone
+  if (p === "/api/files/git-clone" && m === "POST") {
+    handleGitClone(req, res);
     return true;
   }
 
@@ -426,5 +431,48 @@ async function handleLinkFile(req, res) {
     json(res, { linked: true, source, linkPath });
   } catch (err) {
     json(res, { error: err instanceof Error ? err.message : "Link failed" }, 500);
+  }
+}
+
+// ── POST /api/files/git-clone ─────────────────────────────────────────────
+
+async function handleGitClone(req, res) {
+  try {
+    const { url: repoUrl, targetDir } = await parseBody(req);
+
+    if (!repoUrl || !targetDir) {
+      return json(res, { error: "url and targetDir required" }, 400);
+    }
+
+    // Validate URL looks like a git repo (HTTPS or SSH)
+    const validUrl = /^https?:\/\/.+\.git$|^https?:\/\/github\.com\/.+|^git@.+:.+\.git$/;
+    if (!validUrl.test(repoUrl)) {
+      return json(res, { error: "Invalid git repository URL. Use an HTTPS URL (e.g. https://github.com/user/repo.git)" }, 400);
+    }
+
+    if (!fs.existsSync(targetDir) || !fs.statSync(targetDir).isDirectory()) {
+      return json(res, { error: "Target directory not found" }, 404);
+    }
+
+    // Run git clone asynchronously
+    await new Promise((resolve, reject) => {
+      execFile("git", ["clone", repoUrl], { cwd: targetDir, timeout: 120000 }, (err, stdout, stderr) => {
+        if (err) {
+          reject(new Error(stderr || err.message));
+        } else {
+          resolve(stdout);
+        }
+      });
+    });
+
+    // Determine cloned directory name from URL
+    const repoName = path.basename(repoUrl.replace(/\.git$/, ""));
+    const clonedPath = path.join(targetDir, repoName);
+
+    json(res, { cloned: true, url: repoUrl, path: clonedPath });
+  } catch (err) {
+    json(res, {
+      error: `Git clone failed: ${err instanceof Error ? err.message : String(err)}`,
+    }, 500);
   }
 }
