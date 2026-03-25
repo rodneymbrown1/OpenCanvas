@@ -3,6 +3,7 @@ import { ProjectProvider } from "@/lib/ProjectContext";
 import { TerminalProvider } from "@/lib/TerminalContext";
 import { ViewProvider } from "@/lib/ViewContext";
 import { CalendarProvider } from "@/lib/CalendarContext";
+import { JobsProvider } from "@/lib/JobsContext";
 import { CanvasShell } from "@/components/CanvasShell";
 
 export function App() {
@@ -12,7 +13,9 @@ export function App() {
         <TerminalProvider>
           <ViewProvider>
             <CalendarProvider>
-              <CanvasShell />
+              <JobsProvider>
+                <CanvasShell />
+              </JobsProvider>
             </CalendarProvider>
           </ViewProvider>
         </TerminalProvider>

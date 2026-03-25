@@ -42,3 +42,56 @@ body {
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
 }
+
+/* Jobs glow animation when active jobs are running */
+@keyframes jobs-glow-pulse {
+  0%, 100% {
+    box-shadow: 0 0 4px var(--accent), 0 0 8px var(--accent);
+  }
+  50% {
+    box-shadow: 0 0 8px var(--accent), 0 0 16px var(--accent), 0 0 24px var(--accent);
+  }
+}
+
+.jobs-glow {
+  animation: jobs-glow-pulse 1.5s ease-in-out infinite;
+  border-radius: 0.5rem;
+}
+
+/* Recording glow animation — red pulse for active voice recording */
+@keyframes recording-glow-pulse {
+  0%, 100% {
+    box-shadow: 0 0 6px #ef4444, 0 0 12px #ef444480;
+  }
+  50% {
+    box-shadow: 0 0 12px #ef4444, 0 0 24px #ef4444, 0 0 36px #ef444460;
+  }
+}
+
+.recording-glow {
+  animation: recording-glow-pulse 1.2s ease-in-out infinite;
+  border-radius: 9999px;
+}
+
+/* Markdown rendered view */
+.markdown-body h1 { font-size: 1.6em; font-weight: 700; margin: 1em 0 0.5em; color: var(--text-primary); border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+.markdown-body h2 { font-size: 1.35em; font-weight: 600; margin: 1em 0 0.4em; color: var(--text-primary); border-bottom: 1px solid var(--border); padding-bottom: 0.25em; }
+.markdown-body h3 { font-size: 1.15em; font-weight: 600; margin: 0.8em 0 0.3em; color: var(--text-primary); }
+.markdown-body h4, .markdown-body h5, .markdown-body h6 { font-size: 1em; font-weight: 600; margin: 0.6em 0 0.2em; color: var(--text-primary); }
+.markdown-body p { margin: 0.5em 0; }
+.markdown-body ul, .markdown-body ol { margin: 0.5em 0; padding-left: 1.8em; }
+.markdown-body ul { list-style-type: disc; }
+.markdown-body ol { list-style-type: decimal; }
+.markdown-body li { margin: 0.2em 0; }
+.markdown-body a { color: var(--accent); text-decoration: underline; }
+.markdown-body a:hover { color: var(--accent-hover); }
+.markdown-body blockquote { border-left: 3px solid var(--accent); padding: 0.3em 1em; margin: 0.5em 0; color: var(--text-muted); background: var(--bg-tertiary); border-radius: 0 6px 6px 0; }
+.markdown-body code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace; background: var(--bg-tertiary); padding: 0.15em 0.4em; border-radius: 4px; font-size: 0.85em; }
+.markdown-body pre { background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 6px; padding: 0.8em 1em; overflow-x: auto; margin: 0.5em 0; }
+.markdown-body pre code { background: none; padding: 0; border-radius: 0; }
+.markdown-body hr { border: none; border-top: 1px solid var(--border); margin: 1em 0; }
+.markdown-body table { border-collapse: collapse; width: 100%; margin: 0.5em 0; }
+.markdown-body th, .markdown-body td { border: 1px solid var(--border); padding: 0.4em 0.8em; text-align: left; }
+.markdown-body th { background: var(--bg-tertiary); font-weight: 600; color: var(--text-primary); }
+.markdown-body img { max-width: 100%; border-radius: 6px; margin: 0.5em 0; }
+.markdown-body input[type="checkbox"] { margin-right: 0.4em; }

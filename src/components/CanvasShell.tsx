@@ -2,6 +2,7 @@
 import { useEffect, Suspense } from "react";
 import { Sidebar } from "@/components/Sidebar";
 import { TerminalPanel } from "@/components/TerminalPanel";
+import { UpdateBanner } from "@/components/UpdateBanner";
 import { useView } from "@/lib/ViewContext";
 import { logger } from "@/lib/logger";
 import { Loader2 } from "lucide-react";
@@ -70,6 +71,7 @@ export function CanvasShell() {
     <>
       <Sidebar />
       <div className="flex-1 flex flex-col overflow-hidden">
+        <UpdateBanner />
         <main className={`flex-1 overflow-auto ${isWorkspace ? "min-h-0" : ""}`}>
           <Suspense fallback={<ViewLoading />}>
             <ActiveView />

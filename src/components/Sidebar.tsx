@@ -12,6 +12,8 @@ import {
 import { useTheme } from "@/lib/useTheme";
 import { useView, type ViewId } from "@/lib/ViewContext";
 import { CalendarNotifications } from "@/components/CalendarNotifications";
+import { SpeechToTextButton } from "@/components/SpeechToTextButton";
+import { useJobs } from "@/lib/JobsContext";
 
 const NAV_ITEMS: { id: ViewId; icon: typeof FolderOpen; label: string }[] = [
   { id: "workspace", icon: FolderOpen, label: "Workspace" },
@@ -26,6 +28,7 @@ const NAV_ITEMS: { id: ViewId; icon: typeof FolderOpen; label: string }[] = [
 export function Sidebar() {
   const { view, setView } = useView();
   const [theme, toggleTheme] = useTheme();
+  const { activeCount } = useJobs();
 
   return (
     <aside className="w-14 bg-[var(--bg-secondary)] border-r border-[var(--border)] flex flex-col items-center py-4 gap-2">
@@ -50,23 +53,34 @@ export function Sidebar() {
 
       {NAV_ITEMS.map((item) => {
         const isActive = view === item.id;
+        const isJobs = item.id === "jobs";
         return (
           <button
             key={item.id}
             onClick={() => setView(item.id)}
-            title={item.label}
-            className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${
+            title={isJobs && activeCount > 0 ? `Jobs (${activeCount} active)` : item.label}
+            className={`relative w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${
               isActive
                 ? "bg-[var(--bg-tertiary)] text-[var(--accent)]"
-                : "text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
-            }`}
+                : isJobs && activeCount > 0
+                  ? "text-[var(--accent)] hover:bg-[var(--bg-tertiary)]"
+                  : "text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
+            } ${isJobs && activeCount > 0 ? "jobs-glow" : ""}`}
           >
-            <item.icon size={20} />
+            <item.icon size={20} className={isJobs && activeCount > 0 ? "animate-pulse" : ""} />
+            {/* Active jobs badge */}
+            {isJobs && activeCount > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full bg-[var(--accent)] text-[9px] text-white font-bold flex items-center justify-center animate-bounce">
+                {activeCount > 9 ? "9+" : activeCount}
+              </span>
+            )}
           </button>
         );
       })}
 
       <div className="flex-1" />
+
+      <SpeechToTextButton />
 
       <CalendarNotifications />
 

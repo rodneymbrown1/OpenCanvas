@@ -1,6 +1,8 @@
 
 import { useState, useEffect } from "react";
 import { X } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 interface FilePreviewModalProps {
   filePath: string;
@@ -12,6 +14,7 @@ export function FilePreviewModal({ filePath, onClose }: FilePreviewModalProps) {
   const [loading, setLoading] = useState(true);
 
   const fileName = filePath.split("/").pop() || filePath;
+  const isMarkdown = /\.md$/i.test(fileName);
 
   useEffect(() => {
     fetch(`/api/files/read?path=${encodeURIComponent(filePath)}`)
@@ -53,6 +56,12 @@ export function FilePreviewModal({ filePath, onClose }: FilePreviewModalProps) {
         <div className="flex-1 overflow-auto p-4">
           {loading ? (
             <div className="text-xs text-[var(--text-muted)]">Loading...</div>
+          ) : isMarkdown ? (
+            <div className="markdown-body text-sm text-[var(--text-secondary)] leading-relaxed">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {content}
+              </ReactMarkdown>
+            </div>
           ) : (
             <pre className="text-xs leading-5 text-[var(--text-secondary)] whitespace-pre-wrap break-words font-mono">
               {content}
