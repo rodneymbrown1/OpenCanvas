@@ -38,6 +38,8 @@ export class GlobalConfigManager extends ConfigManager<GlobalConfig> {
           web: false,
         },
       },
+      app_settings: { verbose_logging: false },
+      api_keys: {},
       projects: [],
     };
   }

@@ -1,19 +1,18 @@
 
-import { useState, useEffect, useCallback } from "react";
-import { Activity, Clock, CheckCircle, AlertCircle, Terminal } from "lucide-react";
-
-interface Session {
-  id: string;
-  agent: string;
-  cwd: string;
-  status: string;
-  startedAt: string;
-  endedAt: string | null;
-  exitCode: number | null;
-  outputBytes: number;
-  inputBytes: number;
-  pid: number | null;
-}
+import { useState } from "react";
+import {
+  Activity,
+  Clock,
+  CheckCircle,
+  AlertCircle,
+  Terminal,
+  ChevronDown,
+  ChevronRight,
+  Mic,
+  Cpu,
+  ArrowDownUp,
+} from "lucide-react";
+import { useJobs, type Job } from "@/lib/JobsContext";
 
 function formatDuration(start: string, end: string | null): string {
   const startDate = new Date(start);
@@ -28,45 +27,29 @@ function formatDuration(start: string, end: string | null): string {
   return `${hours}h ${minutes % 60}m`;
 }
 
-export default function JobsView() {
-  const [sessions, setSessions] = useState<Session[]>([]);
-  const [loading, setLoading] = useState(true);
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
-  const fetchSessions = useCallback(async () => {
-    try {
-      const res = await fetch("/api/sessions");
-      if (res.ok) {
-        const data = await res.json();
-        setSessions(data.sessions || []);
-      }
-    } catch {
-      // PTY server may not be running
-    }
-    setLoading(false);
-  }, []);
+function JobCard({ job, defaultExpanded }: { job: Job; defaultExpanded?: boolean }) {
+  const [expanded, setExpanded] = useState(defaultExpanded || false);
+  const isRunning = job.status === "running";
 
-  useEffect(() => {
-    fetchSessions();
-    const interval = setInterval(fetchSessions, 3000);
-    return () => clearInterval(interval);
-  }, [fetchSessions]);
-
-  const running = sessions.filter((s) => s.status === "running");
-  const completed = sessions.filter((s) => s.status !== "running");
-
-  const statusIcon = (status: string) => {
-    switch (status) {
+  const statusIcon = () => {
+    switch (job.status) {
       case "running":
-        return <Activity size={14} className="text-[var(--accent)] animate-pulse" />;
+        return <Activity size={16} className="text-[var(--accent)] animate-pulse" />;
       case "completed":
-        return <CheckCircle size={14} className="text-[var(--success)]" />;
+        return <CheckCircle size={16} className="text-[var(--success)]" />;
       default:
-        return <AlertCircle size={14} className="text-[var(--error)]" />;
+        return <AlertCircle size={16} className="text-[var(--error)]" />;
     }
   };
 
-  const agentColor = (agent: string) => {
-    switch (agent) {
+  const agentColor = () => {
+    switch (job.agent) {
       case "claude": return "bg-orange-500";
       case "codex": return "bg-green-500";
       case "gemini": return "bg-blue-500";
@@ -74,67 +57,201 @@ export default function JobsView() {
     }
   };
 
+  const statusLabel = () => {
+    switch (job.status) {
+      case "running": return "Running";
+      case "completed": return "Completed";
+      case "failed": return "Failed";
+      default: return job.status;
+    }
+  };
+
+  return (
+    <div
+      className={`bg-[var(--bg-secondary)] border rounded-xl overflow-hidden transition-all ${
+        isRunning
+          ? "border-[var(--accent)]/40 shadow-[0_0_12px_rgba(59,130,246,0.15)]"
+          : "border-[var(--border)]"
+      }`}
+    >
+      {/* Header row — always visible */}
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full px-4 py-3 flex items-center gap-3 hover:bg-[var(--bg-tertiary)]/50 transition-colors"
+      >
+        {expanded ? (
+          <ChevronDown size={14} className="text-[var(--text-muted)] shrink-0" />
+        ) : (
+          <ChevronRight size={14} className="text-[var(--text-muted)] shrink-0" />
+        )}
+
+        {statusIcon()}
+        <span className={`w-2.5 h-2.5 rounded-full ${agentColor()} shrink-0`} />
+
+        <div className="flex-1 min-w-0 text-left">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-[var(--text-primary)]">
+              {job.agent.charAt(0).toUpperCase() + job.agent.slice(1)} Job
+            </span>
+            <span className="text-[10px] text-[var(--text-muted)] font-mono">
+              {job.id}
+            </span>
+            {job.prompt && (
+              <span className="flex items-center gap-1 text-[10px] text-[var(--accent)]">
+                <Mic size={10} />
+                voice
+              </span>
+            )}
+          </div>
+          {job.prompt && (
+            <p className="text-xs text-[var(--text-secondary)] truncate mt-0.5">
+              &ldquo;{job.prompt}&rdquo;
+            </p>
+          )}
+        </div>
+
+        <div className="text-right shrink-0">
+          <p className={`text-xs ${isRunning ? "text-[var(--accent)]" : "text-[var(--text-muted)]"}`}>
+            <Clock size={11} className="inline mr-1" />
+            {formatDuration(job.startedAt, job.endedAt)}
+          </p>
+          <p className={`text-[10px] mt-0.5 ${
+            isRunning ? "text-[var(--accent)] font-medium" : "text-[var(--text-muted)]"
+          }`}>
+            {statusLabel()}
+          </p>
+        </div>
+      </button>
+
+      {/* Expanded details */}
+      {expanded && (
+        <div className="px-4 pb-3 border-t border-[var(--border)]/50">
+          <div className="grid grid-cols-2 gap-3 mt-3">
+            {/* Working directory */}
+            <div>
+              <p className="text-[10px] text-[var(--text-muted)] uppercase tracking-wide mb-1">
+                Working Directory
+              </p>
+              <p className="text-xs text-[var(--text-secondary)] font-mono truncate">
+                {job.cwd}
+              </p>
+            </div>
+
+            {/* PID */}
+            <div>
+              <p className="text-[10px] text-[var(--text-muted)] uppercase tracking-wide mb-1">
+                Process
+              </p>
+              <p className="text-xs text-[var(--text-secondary)] flex items-center gap-1">
+                <Cpu size={10} />
+                PID {job.pid || "—"}
+              </p>
+            </div>
+
+            {/* I/O */}
+            <div>
+              <p className="text-[10px] text-[var(--text-muted)] uppercase tracking-wide mb-1">
+                I/O Traffic
+              </p>
+              <p className="text-xs text-[var(--text-secondary)] flex items-center gap-1">
+                <ArrowDownUp size={10} />
+                {formatBytes(job.outputBytes)} out / {formatBytes(job.inputBytes)} in
+              </p>
+            </div>
+
+            {/* Timing */}
+            <div>
+              <p className="text-[10px] text-[var(--text-muted)] uppercase tracking-wide mb-1">
+                Started
+              </p>
+              <p className="text-xs text-[var(--text-secondary)]">
+                {new Date(job.startedAt).toLocaleString()}
+              </p>
+            </div>
+
+            {/* Exit code (if completed) */}
+            {job.exitCode !== null && (
+              <div>
+                <p className="text-[10px] text-[var(--text-muted)] uppercase tracking-wide mb-1">
+                  Exit Code
+                </p>
+                <p className={`text-xs font-mono ${
+                  job.exitCode === 0 ? "text-[var(--success)]" : "text-[var(--error)]"
+                }`}>
+                  {job.exitCode}
+                </p>
+              </div>
+            )}
+
+            {/* Voice prompt */}
+            {job.prompt && (
+              <div className="col-span-2">
+                <p className="text-[10px] text-[var(--text-muted)] uppercase tracking-wide mb-1">
+                  Voice Prompt
+                </p>
+                <p className="text-xs text-[var(--text-secondary)] bg-[var(--bg-primary)] rounded px-2 py-1.5 border border-[var(--border)]">
+                  {job.prompt}
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* Activity indicator for running jobs */}
+          {isRunning && (
+            <div className="mt-3 flex items-center gap-2">
+              <div className="flex-1 h-1 bg-[var(--bg-tertiary)] rounded-full overflow-hidden">
+                <div className="h-full bg-[var(--accent)] rounded-full animate-pulse" style={{ width: "60%" }} />
+              </div>
+              <span className="text-[10px] text-[var(--accent)]">Working...</span>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function JobsView() {
+  const { jobs, activeJobs, activeCount } = useJobs();
+  const completed = jobs.filter((j) => j.status !== "running");
+  const loading = false; // JobsContext handles loading
+
   return (
     <div className="p-6 max-w-4xl mx-auto space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold">Jobs</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-xl font-bold">Jobs</h1>
+          {activeCount > 0 && (
+            <span className="px-2 py-0.5 rounded-full bg-[var(--accent)]/15 text-[var(--accent)] text-xs font-medium animate-pulse">
+              {activeCount} active
+            </span>
+          )}
+        </div>
         <span className="text-xs text-[var(--text-muted)]">
-          {running.length} active &middot; {sessions.length} total
+          {activeCount} active &middot; {jobs.length} total
         </span>
       </div>
 
-      {loading ? (
-        <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-12 text-center">
-          <Activity size={24} className="text-[var(--text-muted)] mx-auto animate-pulse mb-2" />
-          <p className="text-sm text-[var(--text-muted)]">Loading sessions...</p>
-        </div>
-      ) : sessions.length === 0 ? (
+      {jobs.length === 0 ? (
         <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-12 text-center space-y-3">
           <Terminal size={40} className="text-[var(--text-muted)] mx-auto" />
           <p className="text-[var(--text-secondary)]">No active jobs</p>
           <p className="text-xs text-[var(--text-muted)]">
             Jobs will appear here when your coding agent is working.
-            Go to the Workspace and connect an agent.
+            Use the microphone button in the sidebar to start a voice-triggered job,
+            or go to the Workspace and connect an agent.
           </p>
         </div>
       ) : (
         <>
           {/* Active jobs */}
-          {running.length > 0 && (
+          {activeJobs.length > 0 && (
             <div className="space-y-2">
               <h2 className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide">
-                Active ({running.length})
+                Active ({activeJobs.length})
               </h2>
-              {running.map((s) => (
-                <div
-                  key={s.id}
-                  className="bg-[var(--bg-secondary)] border border-[var(--accent)]/30 rounded-xl px-4 py-3 flex items-center gap-4"
-                >
-                  {statusIcon(s.status)}
-                  <span className={`w-2 h-2 rounded-full ${agentColor(s.agent)}`} />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm font-medium text-[var(--text-primary)]">
-                        {s.agent.charAt(0).toUpperCase() + s.agent.slice(1)} Session
-                      </p>
-                      <span className="text-[10px] text-[var(--text-muted)] font-mono">
-                        {s.id}
-                      </span>
-                    </div>
-                    <p className="text-xs text-[var(--text-muted)] truncate">
-                      {s.cwd}
-                    </p>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <p className="text-xs text-[var(--accent)]">
-                      <Clock size={11} className="inline mr-1" />
-                      {formatDuration(s.startedAt, null)}
-                    </p>
-                    <p className="text-[10px] text-[var(--text-muted)]">
-                      PID {s.pid}
-                    </p>
-                  </div>
-                </div>
+              {activeJobs.map((job) => (
+                <JobCard key={job.id} job={job} defaultExpanded />
               ))}
             </div>
           )}
@@ -145,30 +262,8 @@ export default function JobsView() {
               <h2 className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide">
                 History ({completed.length})
               </h2>
-              {completed.map((s) => (
-                <div
-                  key={s.id}
-                  className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl px-4 py-3 flex items-center gap-4"
-                >
-                  {statusIcon(s.status)}
-                  <span className={`w-2 h-2 rounded-full ${agentColor(s.agent)}`} />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm text-[var(--text-secondary)]">
-                        {s.agent.charAt(0).toUpperCase() + s.agent.slice(1)} Session
-                      </p>
-                      <span className="text-[10px] text-[var(--text-muted)] font-mono">
-                        {s.id}
-                      </span>
-                    </div>
-                    <p className="text-xs text-[var(--text-muted)]">
-                      {new Date(s.startedAt).toLocaleString()}
-                      {" — "}
-                      {formatDuration(s.startedAt, s.endedAt)}
-                      {s.exitCode !== null && ` (exit ${s.exitCode})`}
-                    </p>
-                  </div>
-                </div>
+              {completed.map((job) => (
+                <JobCard key={job.id} job={job} />
               ))}
             </div>
           )}

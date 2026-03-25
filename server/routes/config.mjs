@@ -6,6 +6,10 @@ import {
   readProjectConfigRaw,
   writeProjectConfigRaw,
 } from "../../src/lib/config.js";
+import {
+  readGlobalConfig,
+  writeGlobalConfig,
+} from "../../src/lib/globalConfig.js";
 import { RunConfigManager } from "../../src/lib/core/RunConfigManager.js";
 import { SkillsManager } from "../../src/lib/core/SkillsManager.js";
 import fs from "fs";
@@ -57,6 +61,52 @@ export function handle(req, res, url) {
   const pathname = url.pathname;
   const method = req.method;
 
+  // --- /api/config/api-keys (root-scoped API key management) ---
+  if (pathname === "/api/config/api-keys") {
+    if (method === "GET") {
+      try {
+        const globalConfig = readGlobalConfig();
+        const keys = globalConfig.api_keys || {};
+        // Mask values for display
+        const masked = {};
+        for (const [k, v] of Object.entries(keys)) {
+          if (typeof v === "string" && v.length > 8) {
+            masked[k] = v.slice(0, 4) + "..." + v.slice(-4);
+          } else {
+            masked[k] = v ? "****" : "";
+          }
+        }
+        json(res, { api_keys: masked, _rootScoped: true });
+      } catch {
+        json(res, { error: "Failed to read API keys" }, 500);
+      }
+      return true;
+    }
+
+    if (method === "PATCH") {
+      (async () => {
+        try {
+          const body = await parseBody(req);
+          const globalConfig = readGlobalConfig();
+
+          if (body.action === "remove" && body.key) {
+            delete globalConfig.api_keys[body.key];
+          } else if (body.api_keys && typeof body.api_keys === "object") {
+            globalConfig.api_keys = { ...globalConfig.api_keys, ...body.api_keys };
+          }
+
+          writeGlobalConfig(globalConfig);
+          json(res, { ok: true, keys: Object.keys(globalConfig.api_keys) });
+        } catch {
+          json(res, { error: "Failed to update API keys" }, 500);
+        }
+      })();
+      return true;
+    }
+
+    return false;
+  }
+
   // --- /api/config ---
   if (pathname === "/api/config") {
     if (method === "GET") {
@@ -68,8 +118,19 @@ export function handle(req, res, url) {
           json(res, { ...safe, _projectScoped: true });
         } else {
           const config = readConfig();
-          const safe = { ...config, api_keys: undefined };
-          json(res, safe);
+          // Merge api_keys from global config
+          const globalConfig = readGlobalConfig();
+          const globalKeys = globalConfig.api_keys || {};
+          // Mask keys for display
+          const maskedKeys = {};
+          for (const [k, v] of Object.entries(globalKeys)) {
+            if (typeof v === "string" && v.length > 8) {
+              maskedKeys[k] = v.slice(0, 4) + "..." + v.slice(-4);
+            } else {
+              maskedKeys[k] = v ? "****" : "";
+            }
+          }
+          json(res, { ...config, api_keys: maskedKeys });
         }
       } catch {
         json(res, { error: "Failed to read config" }, 500);
@@ -82,16 +143,30 @@ export function handle(req, res, url) {
       (async () => {
         try {
           const updates = await parseBody(req);
-          if (workDir) {
-            const updated = updateProjectConfig(workDir, (config) =>
-              deepMerge(config, updates)
-            );
-            json(res, updated);
+
+          // Route api_keys to global config (root scope)
+          if (updates.api_keys) {
+            const globalConfig = readGlobalConfig();
+            globalConfig.api_keys = { ...globalConfig.api_keys, ...updates.api_keys };
+            writeGlobalConfig(globalConfig);
+            delete updates.api_keys;
+          }
+
+          // Apply remaining updates to project/app config
+          if (Object.keys(updates).length > 0) {
+            if (workDir) {
+              const updated = updateProjectConfig(workDir, (config) =>
+                deepMerge(config, updates)
+              );
+              json(res, updated);
+            } else {
+              const updated = updateConfig((config) =>
+                deepMerge(config, updates)
+              );
+              json(res, updated);
+            }
           } else {
-            const updated = updateConfig((config) =>
-              deepMerge(config, updates)
-            );
-            json(res, updated);
+            json(res, { ok: true });
           }
         } catch {
           json(res, { error: "Failed to update config" }, 500);

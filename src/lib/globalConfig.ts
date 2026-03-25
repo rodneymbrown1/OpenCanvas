@@ -33,6 +33,7 @@ export interface GlobalConfig {
     permissions: GlobalPermissions;
   };
   app_settings: AppSettings;
+  api_keys: Record<string, string>;
   projects: ProjectEntry[];
 }
 
@@ -65,6 +66,7 @@ const DEFAULT_GLOBAL_CONFIG: GlobalConfig = {
     },
   },
   app_settings: { ...DEFAULT_APP_SETTINGS },
+  api_keys: {},
   projects: [],
 };
 

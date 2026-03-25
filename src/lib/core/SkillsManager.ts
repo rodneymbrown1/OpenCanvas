@@ -26,6 +26,37 @@ const PROJECT_SKILLS_TEMPLATE = `# Project Skills
 ## Architecture
 
 <!-- Agents: document key architectural decisions -->
+
+## Open Canvas Integration
+
+This project is managed by Open Canvas. You have access to shared services.
+
+### Settings & Config
+- Global config: \`~/.open-canvas/global.yaml\`
+- Calendar data: \`~/.open-canvas/calendar/\`
+- Shared data: \`~/.open-canvas/shared-data/\`
+- PTY server: \`http://localhost:3001\`
+
+### Adding API Keys
+To add an API key to Open Canvas, send a PATCH request:
+\`\`\`
+PATCH http://localhost:3001/api/config/api-keys
+Content-Type: application/json
+{"api_keys": {"key_name": "key_value"}}
+\`\`\`
+The key will appear in Settings > API Keys and be available to all projects.
+
+### Calendar Operations
+- Create event: \`POST /api/calendar\` with \`{action: "create", event: {title, startTime, ...}}\`
+- List events: \`GET /api/calendar\`
+- Filter by project: \`GET /api/calendar?project={workDir}\`
+
+### Calendar Connections
+- List connections: \`GET /api/calendar/connections\`
+- Initiate OAuth: \`POST /api/calendar/connections\` with \`{action: "initiate-oauth", provider: "google"}\`
+- Sync: \`POST /api/calendar/sync\` with \`{action: "sync"}\`
+
+To connect Google Calendar, the user needs \`google_calendar_client_id\` and \`google_calendar_client_secret\` in API Keys.
 `;
 
 const PROJECT_DOC_TEMPLATE = `# Project Documentation

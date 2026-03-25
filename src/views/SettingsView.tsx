@@ -1,9 +1,10 @@
 
 import { useState } from "react";
-import { Key, Bot, Plug, FileText, Globe, Palette } from "lucide-react";
+import { Key, Bot, Plug, FileText, Globe, Palette, Link2 } from "lucide-react";
 import { AgentSettingsPage } from "./SettingsAgentsView";
 import { ApiKeysPage } from "./SettingsApiKeysView";
 import { McpPage } from "./SettingsMcpView";
+import { ConnectionsPage } from "./SettingsConnectionsView";
 import { ProjectConfigPanel } from "./ProjectConfigView";
 import { GlobalSettingsPage } from "./SettingsGlobalView";
 import { OpenCanvasSettingsPage } from "./SettingsOpenCanvasView";
@@ -13,6 +14,7 @@ const TABS = [
   { id: "global", icon: Globe, label: "Global Settings" },
   { id: "agents", icon: Bot, label: "Coding Agents" },
   { id: "api-keys", icon: Key, label: "API Keys" },
+  { id: "connections", icon: Link2, label: "Connections" },
   { id: "mcp", icon: Plug, label: "MCP Servers" },
   { id: "project", icon: FileText, label: "Project Config" },
 ] as const;
@@ -49,6 +51,7 @@ export default function SettingsView() {
         {tab === "global" && <GlobalSettingsPage />}
         {tab === "agents" && <AgentSettingsPage />}
         {tab === "api-keys" && <ApiKeysPage />}
+        {tab === "connections" && <ConnectionsPage />}
         {tab === "mcp" && <McpPage />}
         {tab === "project" && <ProjectConfigPanel />}
       </div>
