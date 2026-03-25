@@ -132,12 +132,24 @@ function executeJob(event) {
         `Sending prompt to ${action.agent || "claude"} in ${action.projectPath || "default project"}: ${action.payload}`
       );
       if (spawnSessionCallback) {
-        // Enrich prompt with project-manager context when no explicit project path
-        let prompt = action.payload;
+        // Build context-enriched prompt with calendar event metadata
+        const contextLines = [
+          `[Calendar Event Triggered]`,
+          `Title: ${event.title}`,
+          `Scheduled: ${event.startTime}`,
+          event.description ? `Description: ${event.description}` : null,
+          `Type: Scheduled calendar task`,
+          event.tags?.length ? `Tags: ${event.tags.join(", ")}` : null,
+          action.projectPath ? `Project: ${action.projectPath}` : null,
+        ].filter(Boolean);
+
+        let prompt = `${contextLines.join("\n")}\n\n${action.payload}`;
+
+        // Enrich with project-manager context when no explicit project path
         if (!action.projectPath) {
           const pmSkillsPath = path.join(OC_HOME, "shared-data", "project-manager-skills.md");
           if (fs.existsSync(pmSkillsPath)) {
-            prompt = `[Context: You are a scheduled agent task. Read ${pmSkillsPath} for instructions on cross-project operations. Project list is in ~/.open-canvas/global.yaml under projects[]. Your working directory is ${OC_HOME}.]\n\n${action.payload}`;
+            prompt = `[Context: You are a scheduled agent task. Read ${pmSkillsPath} for instructions on cross-project operations. Project list is in ~/.open-canvas/global.yaml under projects[]. Your working directory is ${OC_HOME}.]\n\n${prompt}`;
           }
         }
         spawnSessionCallback({
@@ -314,4 +326,13 @@ export function getCronStatus() {
     jobs: readCronState(),
     events: readEvents().length,
   };
+}
+
+/**
+ * Trigger an event's job immediately (for testing / manual trigger).
+ * Accepts a full CalendarEvent object.
+ */
+export function triggerEventNow(event) {
+  console.log(`[cron-scheduler] manual trigger: ${event.id} — ${event.title}`);
+  executeJob(event);
 }

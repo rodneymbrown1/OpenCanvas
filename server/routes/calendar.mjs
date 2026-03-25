@@ -21,6 +21,7 @@ import {
 } from "../../src/lib/calendarAgent.js";
 
 import { expandCron } from "../../src/lib/calendarCronExpander.js";
+import { triggerEventNow } from "../cron-scheduler.mjs";
 
 function parseBody(req) {
   return new Promise((resolve, reject) => {
@@ -292,6 +293,46 @@ export async function handle(req, res, url) {
     }
 
     jsonResponse(res, { error: "action required (dismiss)" }, 400);
+    return true;
+  }
+
+  // ── POST /api/calendar/trigger-test ─────────────────────────────────
+  // Creates a test event and triggers it immediately (E2E testing)
+  if (pathname === "/api/calendar/trigger-test" && method === "POST") {
+    ensureCalendarDir();
+    const body = await parseBody(req);
+
+    const title = body.title || "Calendar E2E Test";
+    const prompt = body.prompt || "You are a test event triggered by the calendar system. Confirm you received this by saying: Calendar trigger test successful.";
+    const agent = body.agent || "claude";
+    const projectPath = body.projectPath || undefined;
+
+    // Create the event in calendar.yaml so it's visible in the UI
+    const event = addEvent({
+      title,
+      description: `Test event triggered manually at ${new Date().toISOString()}`,
+      startTime: new Date().toISOString(),
+      source: { agent: "user" },
+      target: "agent",
+      action: {
+        type: "prompt",
+        payload: prompt,
+        agent,
+        projectPath,
+      },
+      tags: ["test", "trigger-test"],
+    });
+
+    // Trigger the job immediately (bypasses scheduler timing)
+    triggerEventNow(event);
+
+    jsonResponse(res, {
+      triggered: true,
+      eventId: event.id,
+      title: event.title,
+      agent,
+      message: "Event created and triggered. Check /api/sessions for the spawned cron session.",
+    });
     return true;
   }
 

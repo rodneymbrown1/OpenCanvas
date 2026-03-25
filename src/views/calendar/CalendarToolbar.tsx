@@ -1,5 +1,15 @@
+import { useState, useEffect } from "react";
 import { ChevronLeft, ChevronRight, Plus, Calendar, LayoutGrid, Columns3, Clock } from "lucide-react";
 import type { CalendarViewType } from "./useCalendarNav";
+
+function useLiveClock() {
+  const [now, setNow] = useState(new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return now;
+}
 
 const VIEW_OPTIONS: { id: CalendarViewType; label: string; icon: typeof Calendar }[] = [
   { id: "dayGridMonth", label: "Month", icon: LayoutGrid },
@@ -28,10 +38,25 @@ export function CalendarToolbar({
   onNewEvent,
   eventCount,
 }: CalendarToolbarProps) {
+  const liveClock = useLiveClock();
+
   const title = currentDate.toLocaleDateString(undefined, {
     month: "long",
     year: "numeric",
     ...(viewType === "timeGridDay" ? { day: "numeric", weekday: "long" } : {}),
+  });
+
+  const clockStr = liveClock.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+
+  const dateStr = liveClock.toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
   });
 
   return (
@@ -43,6 +68,12 @@ export function CalendarToolbar({
         <span className="text-xs text-[var(--text-muted)] bg-[var(--bg-tertiary)] px-2 py-0.5 rounded-full">
           {eventCount}
         </span>
+        <div className="flex items-center gap-1.5 ml-3 px-2.5 py-1 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border)]">
+          <Clock size={12} className="text-[var(--accent)]" />
+          <span className="text-xs font-mono text-[var(--text-primary)]">{dateStr}</span>
+          <span className="text-xs text-[var(--text-muted)]">—</span>
+          <span className="text-xs font-mono font-semibold text-[var(--accent)]">{clockStr}</span>
+        </div>
         <div className="flex items-center gap-1 ml-2">
           <button
             onClick={onPrev}
