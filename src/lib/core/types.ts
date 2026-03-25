@@ -59,6 +59,29 @@ export interface ValidationResult {
   errors: string[];
 }
 
+// ── Port Registry Types ─────────────────────────────────────────────────────
+
+export type PortAllocationStatus = "allocated" | "running" | "stale";
+
+export interface PortAllocation {
+  port: number;
+  projectName: string;
+  projectPath: string;
+  serviceName: string;
+  serviceType: ServiceType;
+  pid?: number;
+  sessionId?: string;
+  allocatedAt: string;
+  lastSeen?: string;
+  status: PortAllocationStatus;
+}
+
+export interface PortRegistryData {
+  version: number;
+  portRange: { min: number; max: number };
+  allocations: PortAllocation[];
+}
+
 // ── Skills Types ────────────────────────────────────────────────────────────
 
 export type SkillsScope = "global" | "project";

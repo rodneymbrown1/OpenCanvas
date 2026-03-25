@@ -1,4 +1,3 @@
-"use client";
 
 import { useState, useEffect, useCallback } from "react";
 import { BarChart3, Zap, Clock, ArrowUpDown } from "lucide-react";

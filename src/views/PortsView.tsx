@@ -1,4 +1,3 @@
-"use client";
 
 import { useState, useEffect, useCallback } from "react";
 import { RefreshCw, Globe, Database, Terminal, Server, Wifi, ExternalLink, X } from "lucide-react";
@@ -10,6 +9,8 @@ interface PortInfo {
   user: string;
   type: string;
   label: string;
+  projectName?: string;
+  serviceName?: string;
 }
 
 function getPortCategory(port: number, label: string): { icon: typeof Globe; color: string } {
@@ -59,8 +60,79 @@ export default function PortsView() {
     setKilling(null);
   };
 
-  const devPorts = ports.filter((p) => p.label);
-  const otherPorts = ports.filter((p) => !p.label);
+  // Group ports: Open Canvas projects, dev services, other
+  const projectGroups = new Map<string, PortInfo[]>();
+  const devPorts: PortInfo[] = [];
+  const otherPorts: PortInfo[] = [];
+
+  for (const p of ports) {
+    if (p.projectName) {
+      const group = projectGroups.get(p.projectName) || [];
+      group.push(p);
+      projectGroups.set(p.projectName, group);
+    } else if (p.label) {
+      devPorts.push(p);
+    } else {
+      otherPorts.push(p);
+    }
+  }
+
+  const projectCount = Array.from(projectGroups.values()).reduce((n, g) => n + g.length, 0);
+
+  const stopProject = async (projectPorts: PortInfo[]) => {
+    if (!confirm(`Stop all ${projectPorts.length} port(s) for this project?`)) return;
+    for (const p of projectPorts) {
+      await killPort(p.pid, p.port);
+    }
+  };
+
+  const renderPortRow = (p: PortInfo, showLabel = true) => {
+    const { icon: Icon, color } = getPortCategory(p.port, p.label);
+    return (
+      <div key={p.port} className="px-4 py-3 flex items-center gap-4">
+        <Icon size={16} className={color} />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-mono font-bold text-[var(--text-primary)]">
+              :{p.port}
+            </span>
+            {p.serviceName && (
+              <span className="text-xs text-green-400">{p.serviceName}</span>
+            )}
+            {showLabel && p.label && !p.serviceName && (
+              <span className="text-xs text-[var(--accent)]">{p.label}</span>
+            )}
+          </div>
+          <p className="text-[10px] text-[var(--text-muted)]">
+            {p.process} &middot; PID {p.pid}
+            {p.user && ` &middot; ${p.user}`}
+          </p>
+        </div>
+        <div className="flex items-center gap-1 shrink-0">
+          {p.port >= 3000 && p.port <= 9999 && !p.label.includes("PTY") && !p.label.includes("debugger") && (
+            <a
+              href={`http://localhost:${p.port}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] text-[var(--text-muted)] hover:text-[var(--accent)] hover:bg-[var(--bg-tertiary)] transition-colors"
+            >
+              <ExternalLink size={11} />
+              Open
+            </a>
+          )}
+          <button
+            onClick={() => killPort(p.pid, p.port)}
+            disabled={killing === p.port}
+            className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] text-[var(--text-muted)] hover:text-[var(--error)] hover:bg-[var(--bg-tertiary)] transition-colors disabled:opacity-40"
+            title={`Kill port ${p.port}`}
+          >
+            <X size={11} />
+            Kill
+          </button>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="p-6 max-w-4xl mx-auto space-y-6">
@@ -87,10 +159,10 @@ export default function PortsView() {
         </div>
         <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-4">
           <div className="flex items-center gap-2 mb-1">
-            <Globe size={16} className="text-blue-400" />
-            <span className="text-xs text-[var(--text-muted)]">Dev Servers</span>
+            <Globe size={16} className="text-green-400" />
+            <span className="text-xs text-[var(--text-muted)]">Open Canvas Projects</span>
           </div>
-          <p className="text-2xl font-bold">{devPorts.length}</p>
+          <p className="text-2xl font-bold">{projectGroups.size}</p>
         </div>
         <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-4">
           <div className="flex items-center gap-2 mb-1">
@@ -103,55 +175,46 @@ export default function PortsView() {
         </div>
       </div>
 
-      {/* Known dev ports */}
+      {/* Open Canvas Project Groups */}
+      {projectGroups.size > 0 && (
+        <div className="space-y-3">
+          <h2 className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide">
+            Open Canvas Projects ({projectCount} port{projectCount !== 1 ? "s" : ""})
+          </h2>
+          {Array.from(projectGroups.entries()).map(([projectName, projectPorts]) => (
+            <div key={projectName} className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl overflow-hidden">
+              <div className="px-4 py-2.5 bg-[var(--bg-tertiary)] flex items-center justify-between border-b border-[var(--border)]">
+                <div className="flex items-center gap-2">
+                  <Globe size={14} className="text-green-400" />
+                  <span className="text-sm font-semibold text-[var(--text-primary)]">{projectName}</span>
+                  <span className="text-[10px] text-[var(--text-muted)]">
+                    {projectPorts.length} service{projectPorts.length !== 1 ? "s" : ""}
+                  </span>
+                </div>
+                <button
+                  onClick={() => stopProject(projectPorts)}
+                  className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] text-[var(--text-muted)] hover:text-[var(--error)] hover:bg-[var(--bg-secondary)] transition-colors"
+                >
+                  <X size={11} />
+                  Stop All
+                </button>
+              </div>
+              <div className="divide-y divide-[var(--border)]">
+                {projectPorts.map((p) => renderPortRow(p))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Dev Services (untagged but known) */}
       {devPorts.length > 0 && (
         <div className="space-y-2">
           <h2 className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide">
             Dev Services ({devPorts.length})
           </h2>
           <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl overflow-hidden divide-y divide-[var(--border)]">
-            {devPorts.map((p) => {
-              const { icon: Icon, color } = getPortCategory(p.port, p.label);
-              return (
-                <div key={p.port} className="px-4 py-3 flex items-center gap-4">
-                  <Icon size={16} className={color} />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-mono font-bold text-[var(--text-primary)]">
-                        :{p.port}
-                      </span>
-                      <span className="text-xs text-[var(--accent)]">{p.label}</span>
-                    </div>
-                    <p className="text-[10px] text-[var(--text-muted)]">
-                      {p.process} &middot; PID {p.pid}
-                      {p.user && ` &middot; ${p.user}`}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    {p.port >= 3000 && p.port <= 9999 && !p.label.includes("PTY") && !p.label.includes("debugger") && (
-                      <a
-                        href={`http://localhost:${p.port}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] text-[var(--text-muted)] hover:text-[var(--accent)] hover:bg-[var(--bg-tertiary)] transition-colors"
-                      >
-                        <ExternalLink size={11} />
-                        Open
-                      </a>
-                    )}
-                    <button
-                      onClick={() => killPort(p.pid, p.port)}
-                      disabled={killing === p.port}
-                      className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] text-[var(--text-muted)] hover:text-[var(--error)] hover:bg-[var(--bg-tertiary)] transition-colors disabled:opacity-40"
-                      title={`Kill port ${p.port}`}
-                    >
-                      <X size={11} />
-                      Kill
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
+            {devPorts.map((p) => renderPortRow(p))}
           </div>
         </div>
       )}

@@ -1,4 +1,3 @@
-"use client";
 
 import {
   createContext,
@@ -114,8 +113,8 @@ export function CalendarProvider({ children }: { children: ReactNode }) {
       if (mountedRef.current) setLoading(false);
     });
 
-    const eventsInterval = setInterval(fetchEvents, 10_000);
-    const notifInterval = setInterval(fetchNotifications, 5_000);
+    const eventsInterval = setInterval(fetchEvents, 30_000);
+    const notifInterval = setInterval(fetchNotifications, 15_000);
 
     return () => {
       mountedRef.current = false;

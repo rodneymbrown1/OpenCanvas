@@ -1,4 +1,3 @@
-"use client";
 
 import { useState, useEffect } from "react";
 import { ArrowLeft, Plus, Trash2, Save, Plug } from "lucide-react";

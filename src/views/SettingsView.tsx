@@ -1,14 +1,15 @@
-"use client";
 
 import { useState } from "react";
-import { Key, Bot, Plug, FileText, Globe } from "lucide-react";
+import { Key, Bot, Plug, FileText, Globe, Palette } from "lucide-react";
 import { AgentSettingsPage } from "./SettingsAgentsView";
 import { ApiKeysPage } from "./SettingsApiKeysView";
 import { McpPage } from "./SettingsMcpView";
 import { ProjectConfigPanel } from "./ProjectConfigView";
 import { GlobalSettingsPage } from "./SettingsGlobalView";
+import { OpenCanvasSettingsPage } from "./SettingsOpenCanvasView";
 
 const TABS = [
+  { id: "open-canvas", icon: Palette, label: "Open Canvas" },
   { id: "global", icon: Globe, label: "Global Settings" },
   { id: "agents", icon: Bot, label: "Coding Agents" },
   { id: "api-keys", icon: Key, label: "API Keys" },
@@ -19,7 +20,7 @@ const TABS = [
 type SettingsTab = (typeof TABS)[number]["id"];
 
 export default function SettingsView() {
-  const [tab, setTab] = useState<SettingsTab>("global");
+  const [tab, setTab] = useState<SettingsTab>("open-canvas");
 
   return (
     <div className="flex h-full">
@@ -44,6 +45,7 @@ export default function SettingsView() {
       </div>
 
       <div className="flex-1 overflow-auto">
+        {tab === "open-canvas" && <OpenCanvasSettingsPage />}
         {tab === "global" && <GlobalSettingsPage />}
         {tab === "agents" && <AgentSettingsPage />}
         {tab === "api-keys" && <ApiKeysPage />}

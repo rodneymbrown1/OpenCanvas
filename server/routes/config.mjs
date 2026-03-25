@@ -1,0 +1,287 @@
+import {
+  readConfig,
+  updateConfig,
+  readProjectConfig,
+  updateProjectConfig,
+  readProjectConfigRaw,
+  writeProjectConfigRaw,
+} from "../../src/lib/config.js";
+import { RunConfigManager } from "../../src/lib/core/RunConfigManager.js";
+import { SkillsManager } from "../../src/lib/core/SkillsManager.js";
+import fs from "fs";
+import path from "path";
+
+function parseBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      try {
+        resolve(JSON.parse(body || "{}"));
+      } catch (e) {
+        reject(e);
+      }
+    });
+  });
+}
+
+function deepMerge(target, source) {
+  const result = { ...target };
+  for (const key of Object.keys(source)) {
+    const sv = source[key];
+    const tv = target[key];
+    if (
+      sv &&
+      typeof sv === "object" &&
+      !Array.isArray(sv) &&
+      tv &&
+      typeof tv === "object" &&
+      !Array.isArray(tv)
+    ) {
+      result[key] = deepMerge(tv, sv);
+    } else if (sv !== undefined) {
+      result[key] = sv;
+    }
+  }
+  return result;
+}
+
+const APP_CONFIG_PATH = path.join(process.cwd(), "open-canvas.yaml");
+
+function json(res, data, status = 200) {
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(data));
+}
+
+export function handle(req, res, url) {
+  const pathname = url.pathname;
+  const method = req.method;
+
+  // --- /api/config ---
+  if (pathname === "/api/config") {
+    if (method === "GET") {
+      const workDir = url.searchParams.get("workDir");
+      try {
+        if (workDir) {
+          const config = readProjectConfig(workDir);
+          const safe = { ...config, api_keys: undefined };
+          json(res, { ...safe, _projectScoped: true });
+        } else {
+          const config = readConfig();
+          const safe = { ...config, api_keys: undefined };
+          json(res, safe);
+        }
+      } catch {
+        json(res, { error: "Failed to read config" }, 500);
+      }
+      return true;
+    }
+
+    if (method === "PATCH") {
+      const workDir = url.searchParams.get("workDir");
+      (async () => {
+        try {
+          const updates = await parseBody(req);
+          if (workDir) {
+            const updated = updateProjectConfig(workDir, (config) =>
+              deepMerge(config, updates)
+            );
+            json(res, updated);
+          } else {
+            const updated = updateConfig((config) =>
+              deepMerge(config, updates)
+            );
+            json(res, updated);
+          }
+        } catch {
+          json(res, { error: "Failed to update config" }, 500);
+        }
+      })();
+      return true;
+    }
+
+    return false;
+  }
+
+  // --- /api/project-yaml ---
+  if (pathname === "/api/project-yaml") {
+    if (method === "GET") {
+      const workDir = url.searchParams.get("workDir");
+      try {
+        if (workDir) {
+          const content = readProjectConfigRaw(workDir);
+          json(res, {
+            content,
+            path: path.join(workDir, "open-canvas.yaml"),
+            isProjectScoped: true,
+          });
+        } else {
+          const content = fs.existsSync(APP_CONFIG_PATH)
+            ? fs.readFileSync(APP_CONFIG_PATH, "utf-8")
+            : "";
+          json(res, {
+            content,
+            path: APP_CONFIG_PATH,
+            isProjectScoped: false,
+          });
+        }
+      } catch {
+        json(res, { content: "" });
+      }
+      return true;
+    }
+
+    if (method === "PUT") {
+      (async () => {
+        const workDir = url.searchParams.get("workDir");
+        try {
+          const { content } = await parseBody(req);
+          if (workDir) {
+            writeProjectConfigRaw(workDir, content);
+          } else {
+            fs.writeFileSync(APP_CONFIG_PATH, content, "utf-8");
+          }
+          json(res, { ok: true });
+        } catch {
+          json(res, { error: "Failed to save" }, 500);
+        }
+      })();
+      return true;
+    }
+
+    return false;
+  }
+
+  // --- /api/run-config ---
+  if (pathname === "/api/run-config") {
+    if (method === "GET") {
+      const cwd = url.searchParams.get("cwd");
+      if (!cwd) {
+        json(res, { error: "cwd required" }, 400);
+        return true;
+      }
+
+      const manager = new RunConfigManager(cwd);
+
+      if (!manager.exists()) {
+        json(res, { exists: false, config: null });
+        return true;
+      }
+
+      const config = manager.read();
+      const validation = manager.validate(config);
+      const topology = manager.getTopology();
+
+      json(res, {
+        exists: true,
+        config,
+        startOrder: topology.startOrder,
+        validation,
+        agentPrompt: manager.toAgentPrompt(),
+      });
+      return true;
+    }
+
+    if (method === "POST") {
+      (async () => {
+        try {
+          const action = url.searchParams.get("action");
+          const body = await parseBody(req);
+          const cwd = body.cwd;
+
+          if (!cwd) {
+            json(res, { error: "cwd required in body" }, 400);
+            return;
+          }
+
+          const manager = new RunConfigManager(cwd);
+
+          // Auto-detect services from filesystem
+          if (action === "detect") {
+            const config = manager.detectAndWrite();
+            const validation = manager.validate(config);
+            const servicesFound = Object.keys(config.services).length;
+
+            let skillsGenerated = false;
+            if (servicesFound > 0) {
+              try {
+                const skillsMgr = new SkillsManager("project", cwd);
+                skillsMgr.ensureFiles();
+                const runSection =
+                  SkillsManager.generateRunSection(config);
+                skillsMgr.appendSection("Running the App", runSection);
+                skillsGenerated = true;
+              } catch (err) {
+                console.error(
+                  "[api/run-config] skills generation failed:",
+                  err
+                );
+              }
+            }
+
+            json(res, {
+              config,
+              startOrder: manager.getStartOrder(),
+              validation,
+              servicesFound,
+              skillsGenerated,
+            });
+            return;
+          }
+
+          // Add a single service
+          if (action === "add-service") {
+            const { name, service } = body;
+            if (!name || !service) {
+              json(res, { error: "name and service required" }, 400);
+              return;
+            }
+            const config = manager.addService(name, service);
+            json(res, { config });
+            return;
+          }
+
+          // Remove a service
+          if (action === "remove-service") {
+            const { name } = body;
+            if (!name) {
+              json(res, { error: "name required" }, 400);
+              return;
+            }
+            const config = manager.removeService(name);
+            json(res, { config });
+            return;
+          }
+
+          // Default: write full config
+          if (body.config) {
+            const validation = manager.validate(body.config);
+            if (!validation.valid) {
+              json(res, { error: "Invalid config", validation }, 400);
+              return;
+            }
+            manager.write(body.config);
+            json(res, { config: body.config, validation });
+            return;
+          }
+
+          json(
+            res,
+            {
+              error:
+                "Provide config in body, or use ?action=detect|add-service|remove-service",
+            },
+            400
+          );
+        } catch (err) {
+          json(res, { error: String(err) }, 500);
+        }
+      })();
+      return true;
+    }
+
+    return false;
+  }
+
+  return false;
+}

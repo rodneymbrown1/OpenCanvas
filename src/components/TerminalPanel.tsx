@@ -1,4 +1,3 @@
-"use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { AgentTerminal } from "@/components/Terminal";
@@ -9,6 +8,7 @@ import { useTerminals } from "@/lib/TerminalContext";
 import { useView } from "@/lib/ViewContext";
 import { GripHorizontal, Loader2, Plus } from "lucide-react";
 import type { AgentType } from "@/lib/types/terminal";
+import { logger } from "@/lib/logger";
 
 export function TerminalPanel() {
   const { view } = useView();
@@ -39,15 +39,18 @@ export function TerminalPanel() {
     try {
       const res = await fetch("/api/pty-status");
       const data = await res.json();
+      logger.terminal(`PTY server status: ${data.running ? "running" : "stopped"}`);
       setPtyReady(data.running);
       return data.running;
     } catch {
+      logger.terminal("PTY server check failed");
       setPtyReady(false);
       return false;
     }
   }, []);
 
   const startPtyServer = useCallback(async () => {
+    logger.terminal("Starting PTY server...");
     setPtyStarting(true);
     try {
       await fetch("/api/pty-status", { method: "POST" });
@@ -57,6 +60,7 @@ export function TerminalPanel() {
       }
     } catch {}
     setPtyStarting(false);
+    logger.terminal("PTY server start sequence complete");
   }, [checkPtyServer]);
 
   // Auto-start PTY server on mount

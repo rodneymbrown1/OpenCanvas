@@ -1,4 +1,3 @@
-"use client";
 
 import {
   createContext,
@@ -8,6 +7,7 @@ import {
   useCallback,
   type ReactNode,
 } from "react";
+import { logger } from "@/lib/logger";
 
 export type ViewId =
   | "workspace"
@@ -64,8 +64,19 @@ function getInitialView(): ViewId {
 }
 
 export function ViewProvider({ children }: { children: ReactNode }) {
-  const [view, setViewState] = useState<ViewId>(getInitialView);
+  // Always start with SSR-safe default to prevent hydration mismatch.
+  // Actual URL-based view is read in useEffect below.
+  const [view, setViewState] = useState<ViewId>("workspace");
   const [viewHistory, setViewHistory] = useState<ViewId[]>([]);
+
+  // Hydrate from URL after mount (client only)
+  useEffect(() => {
+    const urlView = getInitialView();
+    logger.nav("Initial view from URL", { path: window.location.pathname, view: urlView });
+    if (urlView !== "workspace") {
+      setViewState(urlView);
+    }
+  }, []);
 
   // Sync URL bar — preserve query params
   useEffect(() => {
@@ -87,6 +98,7 @@ export function ViewProvider({ children }: { children: ReactNode }) {
 
   const setView = useCallback(
     (next: ViewId) => {
+      logger.nav(`Navigating: ${view} → ${next}`);
       setViewHistory((h) => [...h.slice(-20), view]);
       setViewState(next);
       const targetPath = VIEW_PATHS[next] || "/workspace";

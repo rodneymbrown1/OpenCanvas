@@ -1,22 +1,37 @@
-"use client";
 
+import { useEffect, Suspense } from "react";
 import { Sidebar } from "@/components/Sidebar";
 import { TerminalPanel } from "@/components/TerminalPanel";
 import { useView } from "@/lib/ViewContext";
-import dynamic from "next/dynamic";
+import { logger } from "@/lib/logger";
+import { Loader2 } from "lucide-react";
 
-// Lazy-load views to keep initial bundle small
-const WorkspaceView = dynamic(() => import("@/views/WorkspaceView"), { ssr: false });
-const JobsView = dynamic(() => import("@/views/JobsView"), { ssr: false });
-const UsageView = dynamic(() => import("@/views/UsageView"), { ssr: false });
-const PortsView = dynamic(() => import("@/views/PortsView"), { ssr: false });
-const SettingsView = dynamic(() => import("@/views/SettingsView"), { ssr: false });
-const DataView = dynamic(() => import("@/views/DataView"), { ssr: false });
-const ProjectsView = dynamic(() => import("@/views/ProjectsView"), { ssr: false });
-const CalendarView = dynamic(() => import("@/views/CalendarView"), { ssr: false });
+// Static imports — project is ~650K source, no benefit from code-splitting.
+// Dynamic imports with ssr:false caused SSR bailout, white screens, and
+// on-demand Turbopack compilation lag on every tab switch in dev mode.
+import WorkspaceView from "@/views/WorkspaceView";
+import JobsView from "@/views/JobsView";
+import UsageView from "@/views/UsageView";
+import PortsView from "@/views/PortsView";
+import SettingsView from "@/views/SettingsView";
+import DataView from "@/views/DataView";
+import ProjectsView from "@/views/ProjectsView";
+import CalendarView from "@/views/CalendarView";
+
+function ViewLoading() {
+  return (
+    <div className="flex items-center justify-center h-full">
+      <Loader2 size={24} className="animate-spin text-[var(--text-muted)]" />
+    </div>
+  );
+}
 
 function ActiveView() {
   const { view } = useView();
+
+  useEffect(() => {
+    logger.page(`View loaded: ${view}`);
+  }, [view]);
 
   switch (view) {
     case "workspace":
@@ -56,7 +71,9 @@ export function CanvasShell() {
       <Sidebar />
       <div className="flex-1 flex flex-col overflow-hidden">
         <main className={`flex-1 overflow-auto ${isWorkspace ? "min-h-0" : ""}`}>
-          <ActiveView />
+          <Suspense fallback={<ViewLoading />}>
+            <ActiveView />
+          </Suspense>
         </main>
         <TerminalPanel />
       </div>

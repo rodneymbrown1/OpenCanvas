@@ -1,4 +1,3 @@
-"use client";
 
 import {
   createContext,
@@ -8,6 +7,7 @@ import {
   useCallback,
   type ReactNode,
 } from "react";
+import { logger } from "@/lib/logger";
 
 type AgentType = "claude" | "codex" | "gemini";
 
@@ -62,28 +62,37 @@ function readStoredSession(workDir?: string): SessionState | null {
 }
 
 export function SessionProvider({ children }: { children: ReactNode }) {
-  // Read project from URL param on mount
-  const urlProject = getProjectFromUrl();
+  // Always start with SSR-safe defaults to prevent hydration mismatch.
+  // Client-only values (localStorage, URL params) are read in useEffect below.
+  const [session, setSession] = useState<SessionState>({
+    agentConnected: false,
+    sessionId: null,
+    agent: "claude",
+    workDir: "",
+  });
 
-  const [session, setSession] = useState<SessionState>(() => {
+  const [autoReconnecting, setAutoReconnecting] = useState(false);
+
+  // Hydrate from localStorage / URL params after mount (client only)
+  useEffect(() => {
+    logger.session("Hydrating session from localStorage/URL");
+    const urlProject = getProjectFromUrl();
     const stored = readStoredSession(urlProject);
     if (stored) {
-      return {
+      logger.session("Restored session from storage", { agent: stored.agent, workDir: urlProject || stored.workDir, sessionId: stored.sessionId });
+      setSession({
         agent: stored.agent || "claude",
         workDir: urlProject || stored.workDir || "",
         sessionId: stored.sessionId,
         agentConnected: false,
-      };
+      });
+    } else if (urlProject) {
+      logger.session("Set workDir from URL param", urlProject);
+      setSession((s) => ({ ...s, workDir: urlProject }));
+    } else {
+      logger.session("No stored session or URL project found");
     }
-    return {
-      agentConnected: false,
-      sessionId: null,
-      agent: "claude",
-      workDir: urlProject || "",
-    };
-  });
-
-  const [autoReconnecting, setAutoReconnecting] = useState(false);
+  }, []);
 
   // ── Persist to per-project localStorage on every state change ───────────
   useEffect(() => {
@@ -129,6 +138,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       if (!candidateId) return;
 
       setAutoReconnecting(true);
+      logger.session("Auto-reconnect attempting", { candidateId, candidateAgent, candidateWorkDir });
 
       try {
         const res = await fetch(`/api/sessions/${candidateId}`);
@@ -217,6 +227,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const setWorkDir = useCallback((workDir: string) => {
+    logger.session("workDir changed", workDir);
     setSession((s) => ({ ...s, workDir }));
   }, []);
 

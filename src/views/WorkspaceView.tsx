@@ -1,4 +1,3 @@
-"use client";
 
 import { useState, useEffect, useCallback } from "react";
 import { FileExplorer } from "@/components/FileExplorer";
@@ -10,7 +9,6 @@ import { ProjectStatusBar } from "@/components/ProjectStatusBar";
 import { useSession } from "@/lib/SessionContext";
 import { useProject } from "@/lib/ProjectContext";
 import { useTerminals } from "@/lib/TerminalContext";
-import Image from "next/image";
 import {
   PanelLeftClose,
   PanelLeftOpen,
@@ -306,7 +304,7 @@ export default function WorkspaceView() {
           ) : (
             <div className="flex items-center justify-center h-full">
               <div className="text-center space-y-6 max-w-sm">
-                <Image src="/open_canvas_logo.png" alt="Open Canvas" width={200} height={60} className="mx-auto opacity-80" priority />
+                <img src="/open_canvas_logo.png" alt="Open Canvas" width={200} height={60} className="mx-auto opacity-80" />
                 <p className="text-sm text-[var(--text-muted)]">
                   Your app preview will appear here.
                 </p>

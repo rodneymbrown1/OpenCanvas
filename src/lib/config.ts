@@ -52,14 +52,34 @@ export interface OpenCanvasConfig {
 
 const CONFIG_PATH = path.join(process.cwd(), "open-canvas.yaml");
 
+// Cache parsed config — file rarely changes during runtime.
+// writeConfig() invalidates the cache.
+let _configCache: OpenCanvasConfig | null = null;
+let _configMtime = 0;
+
 export function readConfig(): OpenCanvasConfig {
-  const raw = fs.readFileSync(CONFIG_PATH, "utf-8");
-  return YAML.parse(raw) as OpenCanvasConfig;
+  try {
+    const stat = fs.statSync(CONFIG_PATH);
+    const mtime = stat.mtimeMs;
+    if (_configCache && mtime === _configMtime) {
+      return _configCache;
+    }
+    const raw = fs.readFileSync(CONFIG_PATH, "utf-8");
+    _configCache = YAML.parse(raw) as OpenCanvasConfig;
+    _configMtime = mtime;
+    return _configCache;
+  } catch {
+    // Fallback: read without cache on stat failure
+    const raw = fs.readFileSync(CONFIG_PATH, "utf-8");
+    return YAML.parse(raw) as OpenCanvasConfig;
+  }
 }
 
 export function writeConfig(config: OpenCanvasConfig): void {
   const doc = new YAML.Document(config);
   fs.writeFileSync(CONFIG_PATH, doc.toString(), "utf-8");
+  _configCache = null; // Invalidate cache
+  _configMtime = 0;
 }
 
 export function updateConfig(

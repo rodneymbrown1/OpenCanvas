@@ -1,4 +1,3 @@
-"use client";
 
 import { useState, useCallback, useEffect } from "react";
 import { X, Database } from "lucide-react";

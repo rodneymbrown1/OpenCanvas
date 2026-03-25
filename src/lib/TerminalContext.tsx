@@ -1,4 +1,3 @@
-"use client";
 
 import {
   createContext,
@@ -10,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { useSession } from "@/lib/SessionContext";
+import { logger } from "@/lib/logger";
 import type {
   AgentType,
   TerminalTab,
@@ -126,13 +126,20 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
   // never writes one project's state under another project's key.
   const stateWorkDirRef = useRef(workDir);
 
-  const [state, setState] = useState<ProjectTerminalState>(() => {
-    const initial = loadStateForProject(workDir);
-    statesRef.current.set(slugify(workDir), initial);
-    return initial;
-  });
+  // Always start with SSR-safe defaults to prevent hydration mismatch.
+  // Client-only values (localStorage) are loaded in useEffect below.
+  const [state, setState] = useState<ProjectTerminalState>(createDefaultProjectState);
 
   const [reconciling, setReconciling] = useState(false);
+
+  // Hydrate from localStorage after mount (client only)
+  useEffect(() => {
+    const initial = loadStateForProject(workDir);
+    logger.terminal("Hydrated terminal state", { workDir, tabs: initial.tabs.length });
+    statesRef.current.set(slugify(workDir), initial);
+    setState(initial);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Persist state — but ONLY for the project that owns it ──────────────────
   useEffect(() => {
@@ -218,6 +225,7 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
   const addTab = useCallback(
     (agent: AgentType): string => {
       const id = generateTabId();
+      logger.terminal(`Adding tab: ${agent} (${id})`);
       setState((prev) => {
         const tab: TerminalTab = {
           id,
@@ -258,6 +266,7 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
   );
 
   const removeTab = useCallback((tabId: string) => {
+    logger.terminal(`Removing tab: ${tabId}`);
     setState((prev) => {
       const newTabs = prev.tabs.filter((t) => t.id !== tabId);
       let newActiveId = prev.activeTabId;

@@ -1,4 +1,3 @@
-"use client";
 
 import {
   createContext,
@@ -10,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { useSession } from "./SessionContext";
+import { logger } from "@/lib/logger";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -103,12 +103,61 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (prevWorkDirRef.current && prevWorkDirRef.current !== session.workDir) {
+      logger.project(`Project switched: ${prevWorkDirRef.current} → ${session.workDir}`);
       setState({ ...initialState });
       baselinePortsRef.current = new Set();
       baselineTakenRef.current = false;
       candidatePortRef.current = null;
     }
     prevWorkDirRef.current = session.workDir;
+
+    // Auto-discover already-running ports for this project via PortRegistry
+    if (session.workDir) {
+      (async () => {
+        try {
+          const res = await fetch("/api/ports/registry?action=project-ports", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ projectPath: session.workDir }),
+          });
+          if (!res.ok) return;
+          const data = await res.json();
+          const allocations = data.allocations || [];
+
+          // Find running allocations
+          const running = allocations.filter(
+            (a: { status: string }) => a.status === "running"
+          );
+          if (running.length > 0) {
+            // Find the primary web port
+            const webAlloc = running.find(
+              (a: { serviceType: string }) => a.serviceType === "web"
+            ) || running[0];
+
+            const services: Record<string, ServiceStatusInfo> = {};
+            for (const alloc of running) {
+              services[alloc.serviceName] = {
+                name: alloc.serviceName,
+                state: "running",
+                type: alloc.serviceType,
+                port: alloc.port,
+                pid: alloc.pid,
+              };
+            }
+
+            setState((prev) => ({
+              ...prev,
+              appPort: webAlloc.port,
+              appStatus: "running",
+              services,
+            }));
+            logger.project(`Auto-discovered ${running.length} running port(s) for project`);
+          }
+        } catch {
+          // Registry not available — will fall back to polling
+        }
+      })();
+    }
   }, [session.workDir]);
 
   // ── Stack session polling (checks dedicated stack session for port + log) ─
@@ -156,7 +205,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     }
 
     pollStack();
-    const interval = setInterval(pollStack, 2000);
+    const interval = setInterval(pollStack, 5000);
     return () => {
       cancelled = true;
       clearInterval(interval);
@@ -217,7 +266,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     }
 
     pollServices();
-    const interval = setInterval(pollServices, 3000);
+    const interval = setInterval(pollServices, 8000);
     return () => {
       cancelled = true;
       clearInterval(interval);
@@ -308,7 +357,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     }
 
     pollPorts();
-    const interval = setInterval(pollPorts, 3000);
+    const interval = setInterval(pollPorts, 10000);
     return () => {
       cancelled = true;
       clearInterval(interval);
@@ -319,6 +368,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
 
   const startApp = useCallback(async () => {
     if (!session.workDir || !session.agent) return;
+    logger.project("Starting app", { workDir: session.workDir, agent: session.agent });
     setState((prev) => ({ ...prev, appStatus: "initializing", startupLog: [] }));
 
     try {
@@ -416,6 +466,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
 
   const stopApp = useCallback(async () => {
     if (!session.workDir) return;
+    logger.project("Stopping app", { workDir: session.workDir });
     // Stop services (multi-service)
     try {
       await fetch("/api/services?action=stop", {
@@ -432,6 +483,16 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ cwd: session.workDir }),
+      });
+    } catch {
+      // ignore
+    }
+    // Release ports from registry
+    try {
+      await fetch("/api/ports/registry?action=release", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectPath: session.workDir }),
       });
     } catch {
       // ignore

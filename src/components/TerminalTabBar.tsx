@@ -1,4 +1,3 @@
-"use client";
 
 import { X, Plus, Terminal } from "lucide-react";
 import { useTerminals } from "@/lib/TerminalContext";

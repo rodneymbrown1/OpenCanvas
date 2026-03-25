@@ -1,4 +1,3 @@
-"use client";
 
 import { useState, useEffect } from "react";
 import { X, Check, Loader2, AlertCircle, Terminal } from "lucide-react";

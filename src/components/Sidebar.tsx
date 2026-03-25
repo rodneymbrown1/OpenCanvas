@@ -1,6 +1,3 @@
-"use client";
-
-import Image from "next/image";
 import {
   FolderOpen,
   Bot,
@@ -42,13 +39,12 @@ export function Sidebar() {
         }`}
         title="Project Manager"
       >
-        <Image
+        <img
           src="/open_square_canvas_logo.png"
           alt="Open Canvas"
           width={32}
           height={32}
           className="rounded"
-          style={{ width: "auto", height: "auto" }}
         />
       </button>
 

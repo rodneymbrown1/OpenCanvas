@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import type { SkillsScope } from "./types";
+import type { SkillsScope, RunConfig } from "./types";
 import { SHARED_DATA_DIR } from "@/lib/globalConfig";
 
 const PROJECT_DIR_NAME = ".open-canvas";
@@ -175,6 +175,85 @@ export class SkillsManager {
 
   globalDataExists(): boolean {
     return fs.existsSync(this.globalDataPath);
+  }
+
+  // ── Run Section Generation ──────────────────────────────────────────────
+
+  /**
+   * Generate a "Running the App" section from a RunConfig.
+   * Documents each service with its command, port, dependencies, and env.
+   */
+  static generateRunSection(runConfig: RunConfig): string {
+    const lines: string[] = [];
+    const serviceNames = Object.keys(runConfig.services);
+
+    if (serviceNames.length === 0) {
+      return "No runnable services detected.";
+    }
+
+    lines.push(`Project: **${runConfig.project_name}**`);
+    lines.push("");
+
+    // Compute start order via simple topo sort
+    const order = SkillsManager.simpleTopoSort(runConfig.services);
+    if (order.length > 1) {
+      lines.push(`**Start order:** ${order.join(" → ")}`);
+      lines.push("");
+    }
+
+    for (const name of order) {
+      const svc = runConfig.services[name];
+      if (!svc) continue;
+
+      lines.push(`### ${name} (${svc.type})`);
+      lines.push("");
+      lines.push("```bash");
+      if (svc.cwd && svc.cwd !== ".") {
+        lines.push(`cd ${svc.cwd}`);
+      }
+      lines.push(svc.command);
+      lines.push("```");
+      lines.push("");
+
+      if (svc.port) {
+        lines.push(`- **Port:** ${svc.port}`);
+      }
+      if (svc.depends_on && svc.depends_on.length > 0) {
+        lines.push(`- **Depends on:** ${svc.depends_on.join(", ")}`);
+      }
+      if (svc.env && Object.keys(svc.env).length > 0) {
+        lines.push(`- **Environment:** ${Object.entries(svc.env).map(([k, v]) => `\`${k}=${v}\``).join(", ")}`);
+      }
+      if (svc.ready_pattern) {
+        lines.push(`- **Ready when output matches:** \`${svc.ready_pattern}\``);
+      }
+      lines.push("");
+    }
+
+    if (runConfig.environment?.required_tools?.length) {
+      lines.push(`**Required tools:** ${runConfig.environment.required_tools.join(", ")}`);
+      lines.push("");
+    }
+
+    return lines.join("\n");
+  }
+
+  private static simpleTopoSort(services: Record<string, { depends_on?: string[] }>): string[] {
+    const names = Object.keys(services);
+    const visited = new Set<string>();
+    const result: string[] = [];
+    const visit = (name: string, stack: Set<string>) => {
+      if (visited.has(name) || stack.has(name)) return;
+      stack.add(name);
+      for (const dep of services[name]?.depends_on || []) {
+        if (services[dep]) visit(dep, stack);
+      }
+      stack.delete(name);
+      visited.add(name);
+      result.push(name);
+    };
+    for (const name of names) visit(name, new Set());
+    return result;
   }
 
   // ── Ensure Files ────────────────────────────────────────────────────────

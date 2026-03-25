@@ -32,6 +32,32 @@ import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import pty from "@homebridge/node-pty-prebuilt-multiarch";
 import { initCronScheduler } from "./cron-scheduler.mjs";
+import {
+  cleanupStale as registryCleanup,
+  markRunning as registryMarkRunning,
+  markStopped as registryMarkStopped,
+  releaseProject as registryReleaseProject,
+} from "./port-registry.mjs";
+
+// ── API Route Modules (migrated from Next.js API routes) ──────────────────
+import { handle as handleFiles } from "./routes/files.mjs";
+import { handle as handleConfig } from "./routes/config.mjs";
+import { handle as handleSettings } from "./routes/settings.mjs";
+import { handle as handleProjects } from "./routes/projects.mjs";
+import { handle as handleCalendar } from "./routes/calendar.mjs";
+import { handle as handlePorts } from "./routes/ports.mjs";
+import { handle as handleData } from "./routes/data.mjs";
+import { handle as handleAgents } from "./routes/agents.mjs";
+import { handle as handleSkills } from "./routes/skills.mjs";
+import { handle as handleServices } from "./routes/services.mjs";
+import { handle as handleFolderPicker } from "./routes/folder-picker.mjs";
+import { handle as handleContextHandoff } from "./routes/context-handoff.mjs";
+
+const apiRouteHandlers = [
+  handleFiles, handleConfig, handleSettings, handleProjects,
+  handleCalendar, handlePorts, handleData, handleAgents,
+  handleSkills, handleServices, handleFolderPicker, handleContextHandoff,
+];
 
 const CONFIG_PATH = join(process.cwd(), "open-canvas.yaml");
 
@@ -92,17 +118,90 @@ function getAllSessions() {
 
 // ── HTTP Server (for /sessions API) ────────────────────────────────────────
 
-const httpServer = http.createServer((req, res) => {
+// ── Static file serving for production ─────────────────────────────────────
+const DIST_DIR = path.join(process.cwd(), "dist");
+const MIME_TYPES = {
+  ".html": "text/html", ".js": "application/javascript", ".css": "text/css",
+  ".json": "application/json", ".png": "image/png", ".jpg": "image/jpeg",
+  ".svg": "image/svg+xml", ".ico": "image/x-icon", ".woff2": "font/woff2",
+  ".woff": "font/woff", ".map": "application/json",
+};
+
+function serveStatic(req, res) {
+  if (!fs.existsSync(DIST_DIR)) return false;
+  let filePath = path.join(DIST_DIR, req.url === "/" ? "index.html" : req.url.split("?")[0]);
+  if (!fs.existsSync(filePath)) {
+    // SPA fallback — serve index.html for non-file routes
+    filePath = path.join(DIST_DIR, "index.html");
+    if (!fs.existsSync(filePath)) return false;
+  }
+  const ext = path.extname(filePath);
+  const mime = MIME_TYPES[ext] || "application/octet-stream";
+  res.setHeader("Content-Type", mime);
+  if (ext === ".js" || ext === ".css" || ext === ".woff2") {
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+  }
+  res.writeHead(200);
+  fs.createReadStream(filePath).pipe(res);
+  return true;
+}
+
+const httpServer = http.createServer(async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  res.setHeader("Content-Type", "application/json");
 
   if (req.method === "OPTIONS") {
     res.writeHead(204);
     res.end();
     return;
   }
+
+  // Parse URL for searchParams support
+  const url = new URL(req.url, `http://localhost:${PORT}`);
+
+  // ── Try API route modules first ──────────────────────────────────────
+  if (url.pathname.startsWith("/api/")) {
+    res.setHeader("Content-Type", "application/json");
+
+    // Map /api/sessions → internal /sessions, /api/stack → internal /stack, etc.
+    const apiPath = url.pathname.replace(/^\/api/, "");
+
+    // Handle /api/sessions, /api/sessions/:id, /api/sessions/:id/input
+    if (apiPath === "/sessions" || apiPath.startsWith("/sessions/")) {
+      req.url = apiPath + url.search;
+      // Fall through to existing PTY session handlers below
+    }
+    // Handle /api/stack
+    else if (apiPath.startsWith("/stack")) {
+      req.url = apiPath + url.search;
+      // Fall through to existing PTY stack handlers below
+    }
+    // Handle /api/pty-status — these are in the ports route module
+    else {
+      // Try each API route module
+      for (const handler of apiRouteHandlers) {
+        try {
+          const handled = await handler(req, res, url);
+          if (handled) return;
+        } catch (err) {
+          console.error(`[pty-server] API route error:`, err);
+          if (!res.headersSent) {
+            res.writeHead(500);
+            res.end(JSON.stringify({ error: "Internal server error" }));
+          }
+          return;
+        }
+      }
+      // No API handler matched
+      res.writeHead(404);
+      res.end(JSON.stringify({ error: "API route not found" }));
+      return;
+    }
+  }
+
+  // ── Existing PTY server routes ───────────────────────────────────────
+  res.setHeader("Content-Type", "application/json");
 
   if (req.url === "/sessions") {
     res.end(JSON.stringify({ sessions: getAllSessions() }));
@@ -375,7 +474,7 @@ const httpServer = http.createServer((req, res) => {
     req.on("data", (chunk) => { body += chunk; });
     req.on("end", () => {
       try {
-        const { services, startOrder, cwd } = JSON.parse(body);
+        const { services, startOrder, cwd, projectName } = JSON.parse(body);
         if (!services || !startOrder || !cwd) {
           res.writeHead(400);
           res.end(JSON.stringify({ error: "services, startOrder, and cwd required" }));
@@ -396,17 +495,24 @@ const httpServer = http.createServer((req, res) => {
             const command = svcDef.command;
             console.log(`[pty-server] service:${name} spawning: ${command} in ${serviceCwd}`);
 
+            const serviceEnv = {
+              ...process.env,
+              ...svcDef.env,
+              TERM: "xterm-256color",
+              COLORTERM: "truecolor",
+            };
+            // Tag process with Open Canvas project info
+            if (projectName) {
+              serviceEnv.OC_PROJECT = projectName;
+              serviceEnv.OC_SERVICE = name;
+            }
+
             const ptyProcess = pty.spawn("/bin/zsh", ["-l", "-c", command], {
               name: "xterm-256color",
               cols: 120,
               rows: 30,
               cwd: serviceCwd,
-              env: {
-                ...process.env,
-                ...svcDef.env,
-                TERM: "xterm-256color",
-                COLORTERM: "truecolor",
-              },
+              env: serviceEnv,
             });
 
             session.pid = ptyProcess.pid;
@@ -438,6 +544,14 @@ const httpServer = http.createServer((req, res) => {
                     if (port >= 3000 && port <= 65535) {
                       session.detectedPort = port;
                       console.log(`[pty-server] service:${name} detected port: ${port}`);
+                      // Register in port registry
+                      if (projectName) {
+                        try {
+                          registryMarkRunning(port, ptyProcess.pid, session.id);
+                        } catch (err) {
+                          console.error(`[pty-server] registry markRunning failed:`, err.message);
+                        }
+                      }
                     }
                   }
                 }
@@ -564,6 +678,10 @@ const httpServer = http.createServer((req, res) => {
             s.status = "completed";
             s.endedAt = new Date().toISOString();
             stopped.push({ name: s.serviceName || s.role, sessionId: id });
+            // Update port registry
+            if (s.detectedPort) {
+              try { registryMarkStopped(s.detectedPort); } catch {}
+            }
           }
         }
 
@@ -682,6 +800,9 @@ const httpServer = http.createServer((req, res) => {
     res.end(JSON.stringify({ ok: true }));
     return;
   }
+
+  // ── Static file serving (production) ──────────────────────────────────
+  if (serveStatic(req, res)) return;
 
   res.writeHead(404);
   res.end(JSON.stringify({ error: "Not found" }));
@@ -908,6 +1029,16 @@ wss.on("connection", (ws) => {
 
 httpServer.listen(PORT, () => {
   console.log(`[pty-server] listening on http://localhost:${PORT} (HTTP + WebSocket)`);
+
+  // Cleanup stale port registry entries on startup
+  try {
+    const result = registryCleanup();
+    if (result.removed > 0 || result.marked > 0) {
+      console.log(`[pty-server] port registry cleanup: marked=${result.marked} removed=${result.removed}`);
+    }
+  } catch (err) {
+    console.error(`[pty-server] port registry cleanup failed:`, err.message);
+  }
 
   // Initialize cron scheduler for calendar events
   initCronScheduler((opts) => {

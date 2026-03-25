@@ -18,6 +18,10 @@ export interface GlobalPermissions {
   web: boolean;
 }
 
+export interface AppSettings {
+  verbose_logging: boolean;
+}
+
 export interface GlobalConfig {
   open_canvas_home: string;
   shared_data_dir: string;
@@ -28,6 +32,7 @@ export interface GlobalConfig {
     allowAllEdits: boolean;
     permissions: GlobalPermissions;
   };
+  app_settings: AppSettings;
   projects: ProjectEntry[];
 }
 
@@ -39,6 +44,10 @@ export const GLOBAL_CONFIG_PATH = path.join(OC_HOME, "global.yaml");
 export const SHARED_DATA_DIR = path.join(OC_HOME, "shared-data");
 
 // ── Defaults ─────────────────────────────────────────────────────────────────
+
+export const DEFAULT_APP_SETTINGS: AppSettings = {
+  verbose_logging: false,
+};
 
 const DEFAULT_GLOBAL_CONFIG: GlobalConfig = {
   open_canvas_home: OC_HOME,
@@ -55,6 +64,7 @@ const DEFAULT_GLOBAL_CONFIG: GlobalConfig = {
       web: false,
     },
   },
+  app_settings: { ...DEFAULT_APP_SETTINGS },
   projects: [],
 };
 
@@ -102,7 +112,11 @@ export function readGlobalConfig(home?: string): GlobalConfig {
   try {
     const raw = fs.readFileSync(configPath, "utf-8");
     const parsed = YAML.parse(raw) as Partial<GlobalConfig>;
-    return { ...DEFAULT_GLOBAL_CONFIG, ...parsed };
+    return {
+      ...DEFAULT_GLOBAL_CONFIG,
+      ...parsed,
+      app_settings: { ...DEFAULT_APP_SETTINGS, ...parsed.app_settings },
+    };
   } catch {
     return DEFAULT_GLOBAL_CONFIG;
   }

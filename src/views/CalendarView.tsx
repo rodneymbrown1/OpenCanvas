@@ -1,4 +1,3 @@
-"use client";
 
 import { useState } from "react";
 import { useCalendar, type CalendarEvent } from "@/lib/CalendarContext";

@@ -1,4 +1,3 @@
-"use client";
 
 import { useState } from "react";
 import { X, FolderOpen, FolderPlus, Loader2 } from "lucide-react";

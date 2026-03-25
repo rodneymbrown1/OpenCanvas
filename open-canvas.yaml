@@ -1,5 +1,5 @@
 workspace:
-  root: /Users/rodneymbrown/Software/picasso-imports
+  root: /Users/rodneymbrown/.open-canvas/projects/activate
 agent:
   active: claude
   claude:
@@ -34,7 +34,7 @@ preferences:
   default_stack: nextjs-tailwind
   theme: light
 session:
-  lastSessionId: d8c18122
+  lastSessionId: c274d8a2
   lastAgent: claude
-  lastWorkDir: /Users/rodneymbrown/.open-canvas/projects/devpro-market-fit-and-validation
-  connectedAt: 2026-03-24T08:21:54.276Z
+  lastWorkDir: /Users/rodneymbrown/.open-canvas/projects/activate
+  connectedAt: 2026-03-24T23:58:29.162Z

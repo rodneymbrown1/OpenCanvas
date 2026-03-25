@@ -32,7 +32,7 @@ export class ServiceManager {
   // ── Start / Stop ────────────────────────────────────────────────────────
 
   /** Start all services in dependency order via PTY server. */
-  async startAll(cwd: string): Promise<Record<string, ServiceStatus>> {
+  async startAll(cwd: string, projectName?: string): Promise<Record<string, ServiceStatus>> {
     const topology = this.getTopology();
 
     const res = await fetch(`${this.ptyBaseUrl}/services/start`, {
@@ -42,6 +42,7 @@ export class ServiceManager {
         services: topology.services,
         startOrder: topology.startOrder,
         cwd,
+        projectName: projectName || this.runConfig.project_name,
       }),
     });
 

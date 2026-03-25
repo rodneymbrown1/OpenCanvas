@@ -1,11 +1,26 @@
-"use client";
 
 import { useProject } from "@/lib/ProjectContext";
 import { Loader2, CheckCircle, FileText, Upload, FolderOpen, Globe } from "lucide-react";
 
 export function ProjectStatusBar() {
   const { state, refreshAppPreview } = useProject();
-  const { pipelinePhase, appStatus, appPort } = state;
+  const { pipelinePhase, appStatus, appPort, services } = state;
+
+  // Count running services
+  const runningServices = Object.values(services).filter((s) => s.state === "running");
+  const serviceCount = runningServices.length;
+
+  // Build multi-service label
+  let serviceLabel = "";
+  if (serviceCount > 1) {
+    const portList = runningServices
+      .filter((s) => s.port)
+      .map((s) => `${s.name} :${s.port}`)
+      .join(", ");
+    serviceLabel = `${serviceCount} services running${portList ? ` (${portList})` : ""}`;
+  } else if (appPort) {
+    serviceLabel = `App running on :${appPort}`;
+  }
 
   // Determine what to show
   let icon: React.ReactNode = null;
@@ -38,9 +53,9 @@ export function ProjectStatusBar() {
     color = "#f59e0b";
     bgColor = "rgba(245, 158, 11, 0.08)";
     visible = true;
-  } else if (appStatus === "running" && appPort) {
+  } else if (appStatus === "running" && (appPort || serviceCount > 0)) {
     icon = <Globe size={13} />;
-    label = `App running on :${appPort}`;
+    label = serviceLabel || `App running on :${appPort}`;
     color = "#22c55e";
     bgColor = "rgba(34, 197, 94, 0.08)";
     visible = true;

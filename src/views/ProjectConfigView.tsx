@@ -1,4 +1,3 @@
-"use client";
 
 import { useState, useEffect } from "react";
 import { Save, RefreshCw, FolderOpen } from "lucide-react";
