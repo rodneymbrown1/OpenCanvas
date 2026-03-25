@@ -12,6 +12,7 @@ interface TerminalProps {
   sessionId?: string | null;
   tabId?: string;
   visible?: boolean;
+  resumeSessionId?: string;
   onSessionCreated?: (sessionId: string) => void;
   onReconnectFailed?: () => void;
 }
@@ -34,6 +35,7 @@ export function AgentTerminal({
   sessionId,
   tabId,
   visible = true,
+  resumeSessionId,
   onSessionCreated,
   onReconnectFailed,
 }: TerminalProps) {
@@ -114,8 +116,8 @@ export function AgentTerminal({
         term.writeln(`\x1b[36m[Open Canvas]\x1b[0m Reconnecting to ${agent} (session: ${sessionId})...`);
         ws.send(JSON.stringify({ type: "reconnect", sessionId }));
       } else {
-        log("info", `WS open — sending spawn: agent=${agent} cwd=${cwd} cols=${term.cols} rows=${term.rows}`);
-        term.writeln(`\x1b[36m[Open Canvas]\x1b[0m Spawning ${agent}...`);
+        log("info", `WS open — sending spawn: agent=${agent} cwd=${cwd} cols=${term.cols} rows=${term.rows}${resumeSessionId ? ` resume=${resumeSessionId}` : ""}`);
+        term.writeln(`\x1b[36m[Open Canvas]\x1b[0m ${resumeSessionId ? "Resuming" : "Spawning"} ${agent}...`);
         ws.send(
           JSON.stringify({
             type: "spawn",
@@ -123,6 +125,7 @@ export function AgentTerminal({
             cwd,
             cols: term.cols,
             rows: term.rows,
+            ...(resumeSessionId ? { resume: resumeSessionId } : {}),
           })
         );
       }

@@ -3,11 +3,12 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { AgentTerminal } from "@/components/Terminal";
 import { ConnectAgentModal } from "@/components/ConnectAgentModal";
 import { TerminalTabBar } from "@/components/TerminalTabBar";
+import { SessionHistoryPanel } from "@/components/SessionHistoryPanel";
 import { useSession } from "@/lib/SessionContext";
 import { useTerminals } from "@/lib/TerminalContext";
 import { useView } from "@/lib/ViewContext";
 import { GripHorizontal, Loader2, Plus } from "lucide-react";
-import type { AgentType } from "@/lib/types/terminal";
+import type { AgentType, SessionHistoryEntry } from "@/lib/types/terminal";
 import { logger } from "@/lib/logger";
 
 export function TerminalPanel() {
@@ -30,6 +31,9 @@ export function TerminalPanel() {
   const [showConnectModal, setShowConnectModal] = useState(false);
   const [ptyReady, setPtyReady] = useState(false);
   const [ptyStarting, setPtyStarting] = useState(false);
+  const [showHistoryPanel, setShowHistoryPanel] = useState(false);
+  const [historyEntries, setHistoryEntries] = useState<SessionHistoryEntry[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   const isWorkspace = view === "workspace";
 
@@ -134,6 +138,48 @@ export function TerminalPanel() {
     setShowConnectModal(false);
   };
 
+  // ── History panel ─────────────────────────────────────────────────────────
+
+  const handleHistoryClicked = useCallback(async () => {
+    if (showHistoryPanel) {
+      setShowHistoryPanel(false);
+      return;
+    }
+    if (!workDir) return;
+    setShowHistoryPanel(true);
+    setHistoryLoading(true);
+    try {
+      const res = await fetch(
+        `/api/session-history?cwd=${encodeURIComponent(workDir)}&limit=100`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        setHistoryEntries(data.entries || []);
+      }
+    } catch {
+      logger.terminal("Failed to fetch session history");
+    }
+    setHistoryLoading(false);
+  }, [showHistoryPanel, workDir]);
+
+  const handleHistoryClosed = useCallback(() => {
+    setShowHistoryPanel(false);
+  }, []);
+
+  const handleRestore = useCallback(
+    async (entry: SessionHistoryEntry) => {
+      setShowHistoryPanel(false);
+      if (!workDir) return;
+      const tabId = addTab(entry.agent, {
+        resumeSessionId: entry.sessionId,
+        label: entry.label,
+      });
+      await ensurePtyReady();
+      updateTabStatus(tabId, "connecting");
+    },
+    [workDir, addTab, ensurePtyReady, updateTabStatus]
+  );
+
   // ── Auto-reconnect tabs with existing sessionIds on mount / project switch ──
   // Wait for reconciliation to finish so we don't try to reconnect stale sessions
   const autoConnectingRef = useRef(new Set<string>());
@@ -174,7 +220,20 @@ export function TerminalPanel() {
         </div>
 
         {/* Tab bar */}
-        <TerminalTabBar onAddClicked={handleAddClicked} />
+        <div className="relative">
+          <TerminalTabBar
+            onAddClicked={handleAddClicked}
+            onHistoryClicked={handleHistoryClicked}
+          />
+          {showHistoryPanel && (
+            <SessionHistoryPanel
+              entries={historyEntries}
+              loading={historyLoading}
+              onRestore={handleRestore}
+              onClose={handleHistoryClosed}
+            />
+          )}
+        </div>
 
         {/* Terminal content area */}
         <div
@@ -221,6 +280,7 @@ export function TerminalPanel() {
                       sessionId={tab.sessionId || undefined}
                       tabId={tab.id}
                       visible={isActive}
+                      resumeSessionId={tab.resumeSessionId}
                       onSessionCreated={(sid) =>
                         handleSessionCreated(tab.id, sid)
                       }

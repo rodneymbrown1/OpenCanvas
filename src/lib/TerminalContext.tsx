@@ -100,9 +100,14 @@ function loadStateForProject(workDir: string): ProjectTerminalState {
 
 // ── Context ─────────────────────────────────────────────────────────────────
 
+interface AddTabOptions {
+  resumeSessionId?: string;
+  label?: string;
+}
+
 interface TerminalContextType {
   state: ProjectTerminalState;
-  addTab: (agent: AgentType) => string;
+  addTab: (agent: AgentType, options?: AddTabOptions) => string;
   removeTab: (tabId: string) => void;
   setActiveTab: (tabId: string) => void;
   connectTab: (tabId: string, sessionId: string) => void;
@@ -223,17 +228,18 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
   // ── Actions ────────────────────────────────────────────────────────────────
 
   const addTab = useCallback(
-    (agent: AgentType): string => {
+    (agent: AgentType, options?: AddTabOptions): string => {
       const id = generateTabId();
-      logger.terminal(`Adding tab: ${agent} (${id})`);
+      logger.terminal(`Adding tab: ${agent} (${id})${options?.resumeSessionId ? ` resume=${options.resumeSessionId}` : ""}`);
       setState((prev) => {
         const tab: TerminalTab = {
           id,
           sessionId: null,
           agent,
-          label: nextLabel(prev.tabs, agent),
+          label: options?.label || nextLabel(prev.tabs, agent),
           status: "disconnected",
           createdAt: new Date().toISOString(),
+          resumeSessionId: options?.resumeSessionId,
         };
 
         // Trigger cross-agent context handoff (async, non-blocking)

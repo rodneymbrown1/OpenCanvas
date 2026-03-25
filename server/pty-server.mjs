@@ -52,11 +52,16 @@ import { handle as handleSkills } from "./routes/skills.mjs";
 import { handle as handleServices } from "./routes/services.mjs";
 import { handle as handleFolderPicker } from "./routes/folder-picker.mjs";
 import { handle as handleContextHandoff } from "./routes/context-handoff.mjs";
+import { handle as handleCalendarConnections } from "./routes/calendar-connections.mjs";
+import { handle as handleVoiceRouting } from "./routes/voice-routing.mjs";
+import { handle as handleSessionHistory, appendHistory } from "./routes/session-history.mjs";
+import { handle as handleUpdates } from "./routes/updates.mjs";
 
 const apiRouteHandlers = [
   handleFiles, handleConfig, handleSettings, handleProjects,
-  handleCalendar, handlePorts, handleData, handleAgents,
+  handleCalendar, handleCalendarConnections, handlePorts, handleData, handleAgents,
   handleSkills, handleServices, handleFolderPicker, handleContextHandoff,
+  handleVoiceRouting, handleSessionHistory, handleUpdates,
 ];
 
 const CONFIG_PATH = join(process.cwd(), "open-canvas.yaml");
@@ -94,6 +99,7 @@ function createSession(agent, cwd) {
   const session = {
     id,
     agent,
+    label: agent.charAt(0).toUpperCase() + agent.slice(1),
     cwd,
     status: "starting",
     startedAt: new Date().toISOString(),
@@ -114,6 +120,27 @@ function getAllSessions() {
   return Array.from(sessions.values()).sort(
     (a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime()
   );
+}
+
+/** Record a completed session to persistent history */
+function recordSessionHistory(session) {
+  try {
+    const startMs = new Date(session.startedAt).getTime();
+    const endMs = session.endedAt ? new Date(session.endedAt).getTime() : Date.now();
+    appendHistory(session.cwd, {
+      sessionId: session.id,
+      agent: session.agent,
+      label: session.label || `${session.agent.charAt(0).toUpperCase() + session.agent.slice(1)}`,
+      cwd: session.cwd,
+      createdAt: session.startedAt,
+      endedAt: session.endedAt,
+      exitCode: session.exitCode,
+      durationSeconds: Math.round((endMs - startMs) / 1000),
+      lastOutputPreview: (session.lastOutput || []).slice(-5),
+    });
+  } catch (err) {
+    console.error(`[pty-server] Failed to record session history:`, err.message);
+  }
 }
 
 // ── HTTP Server (for /sessions API) ────────────────────────────────────────
@@ -171,6 +198,11 @@ const httpServer = http.createServer(async (req, res) => {
     if (apiPath === "/sessions" || apiPath.startsWith("/sessions/")) {
       req.url = apiPath + url.search;
       // Fall through to existing PTY session handlers below
+    }
+    // Handle /api/voice-job
+    else if (apiPath === "/voice-job") {
+      req.url = apiPath + url.search;
+      // Fall through to PTY voice-job handler below
     }
     // Handle /api/stack
     else if (apiPath.startsWith("/stack")) {
@@ -379,6 +411,7 @@ const httpServer = http.createServer(async (req, res) => {
             session.status = "completed";
             session.exitCode = exitCode;
             session.endedAt = new Date().toISOString();
+            recordSessionHistory(session);
           });
 
           console.log(`[pty-server] stack session spawned: id=${session.id} pid=${ptyProcess.pid}`);
@@ -581,6 +614,7 @@ const httpServer = http.createServer(async (req, res) => {
               session.status = "completed";
               session.exitCode = exitCode;
               session.endedAt = new Date().toISOString();
+              recordSessionHistory(session);
               if (!resolved) {
                 resolved = true;
                 resolve({ name, session, status: exitCode === 0 ? "completed" : "error" });
@@ -730,6 +764,103 @@ const httpServer = http.createServer(async (req, res) => {
     return;
   }
 
+  // POST /voice-job — spawn a background agent session with a voice-transcribed prompt
+  if (req.url === "/voice-job" && req.method === "POST") {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      try {
+        const { prompt, agent, cwd, skillContent } = JSON.parse(body);
+        if (!prompt || !cwd) {
+          res.writeHead(400);
+          res.end(JSON.stringify({ error: "prompt and cwd required" }));
+          return;
+        }
+
+        const agentName = agent || "claude";
+        const agentDef = AGENT_COMMANDS[agentName] || AGENT_COMMANDS.claude;
+
+        // Build the full prompt: prepend skill context if provided
+        const fullPrompt = skillContent
+          ? `<context>\n${skillContent}\n</context>\n\n${prompt}`
+          : prompt;
+
+        const session = createSession(agentName, cwd);
+        session.role = "voice";
+        session.prompt = prompt;
+        session.tabId = JSON.parse(body).tabId || undefined;
+
+        console.log(`[pty-server] voice-job: spawning ${agentName} session=${session.id} cwd=${cwd}${session.tabId ? ` tab=${session.tabId}` : ""}`);
+        console.log(`[pty-server] voice-job: prompt="${prompt.substring(0, 120)}${prompt.length > 120 ? "..." : ""}"`);
+
+        const ptyProcess = pty.spawn(agentDef.shell, agentDef.args, {
+          name: "xterm-256color",
+          cols: 120,
+          rows: 30,
+          cwd,
+          env: {
+            ...process.env,
+            TERM: "xterm-256color",
+            COLORTERM: "truecolor",
+            OC_INPUT_MODE: "voice",
+            OC_VOICE_TAB: session.tabId || "",
+          },
+        });
+
+        session.pid = ptyProcess.pid;
+        session.status = "running";
+
+        // Track process for reconnection
+        activeProcesses.set(session.id, {
+          ptyProcess,
+          clients: new Set(),
+          outputBuffer: [],
+        });
+
+        // Send the skill-enhanced prompt after agent initializes
+        setTimeout(() => {
+          ptyProcess.write(fullPrompt + "\r");
+          console.log(`[pty-server] voice-job: sent prompt to session=${session.id}`);
+        }, 3000);
+
+        ptyProcess.onData((data) => {
+          session.outputBytes += Buffer.byteLength(data);
+          session.outputLines += (data.match(/\n/g) || []).length;
+          const clean = stripAnsi(data);
+          const lines = clean.split("\n").filter((l) => l.trim());
+          for (const line of lines) {
+            session.lastOutput.push(line.trim());
+            if (session.lastOutput.length > 20) session.lastOutput.shift();
+          }
+          const proc = activeProcesses.get(session.id);
+          if (proc) {
+            proc.outputBuffer.push(data);
+            if (proc.outputBuffer.length > 200) proc.outputBuffer.shift();
+            for (const client of proc.clients) {
+              if (client.readyState === 1) {
+                client.send(JSON.stringify({ type: "output", data }));
+              }
+            }
+          }
+        });
+
+        ptyProcess.onExit(({ exitCode }) => {
+          session.status = exitCode === 0 ? "completed" : "failed";
+          session.exitCode = exitCode;
+          session.endedAt = new Date().toISOString();
+          console.log(`[pty-server] voice-job: session=${session.id} exited code=${exitCode}`);
+          recordSessionHistory(session);
+        });
+
+        res.end(JSON.stringify({ session }));
+      } catch (err) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ error: "Invalid JSON body" }));
+      }
+    });
+    return;
+  }
+
   // POST /sessions/:id/input — send input to a running session
   const inputMatch = req.url?.match(/^\/sessions\/(.+)\/input$/);
   if (inputMatch && req.method === "POST") {
@@ -840,15 +971,27 @@ wss.on("connection", (ws) => {
         const cols = msg.cols || 120;
         const rows = msg.rows || 30;
 
+        // Build args — inject --resume for Claude when restoring from history
+        let spawnArgs = [...agentDef.args];
+        if (msg.resume && agentName === "claude") {
+          // Replace "claude" with "claude --resume" in the shell -c argument
+          spawnArgs = spawnArgs.map((a) =>
+            a === "claude" ? "claude --resume" : a
+          );
+        }
+
         const session = createSession(agentName, cwd);
+        if (msg.resume) {
+          session.label = `${agentName.charAt(0).toUpperCase() + agentName.slice(1)} (resumed)`;
+        }
         currentSessionId = session.id;
 
         try {
           console.log(
-            `[pty-server] spawning: ${agentDef.shell} ${agentDef.args.join(" ")} | agent=${agentName} session=${session.id} cwd=${cwd} (${cols}x${rows})`
+            `[pty-server] spawning: ${agentDef.shell} ${spawnArgs.join(" ")} | agent=${agentName} session=${session.id} cwd=${cwd} (${cols}x${rows})${msg.resume ? ` resume=${msg.resume}` : ""}`
           );
 
-          const ptyProcess = pty.spawn(agentDef.shell, agentDef.args, {
+          const ptyProcess = pty.spawn(agentDef.shell, spawnArgs, {
             name: "xterm-256color",
             cols,
             rows,
@@ -923,6 +1066,9 @@ wss.on("connection", (ws) => {
             session.status = "completed";
             session.exitCode = exitCode;
             session.endedAt = new Date().toISOString();
+
+            // Persist to session history
+            recordSessionHistory(session);
 
             const proc = activeProcesses.get(session.id);
             if (proc) {
@@ -1077,6 +1223,23 @@ httpServer.listen(PORT, () => {
       session.status = "exited";
       session.exitCode = exitCode;
       session.endedAt = new Date().toISOString();
+      recordSessionHistory(session);
     });
   });
 });
+
+// ── Graceful shutdown: record still-running sessions to history ────────────
+function gracefulShutdown(signal) {
+  console.log(`[pty-server] ${signal} received, recording running sessions...`);
+  for (const session of sessions.values()) {
+    if (session.status === "running" || session.status === "starting") {
+      session.endedAt = new Date().toISOString();
+      session.status = "completed";
+      recordSessionHistory(session);
+    }
+  }
+  process.exit(0);
+}
+
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));

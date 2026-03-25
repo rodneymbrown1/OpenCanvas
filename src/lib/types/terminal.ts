@@ -7,6 +7,29 @@ export interface TerminalTab {
   label: string;
   status: "disconnected" | "connecting" | "connected" | "exited";
   createdAt: string;
+  /** If set, the terminal should resume this prior session on spawn */
+  resumeSessionId?: string;
+}
+
+export interface SessionHistoryEntry {
+  /** PTY session ID (8-char UUID) */
+  sessionId: string;
+  /** Agent that ran the session */
+  agent: AgentType;
+  /** Last known tab label */
+  label: string;
+  /** Working directory at session creation */
+  cwd: string;
+  /** ISO timestamp of session creation */
+  createdAt: string;
+  /** ISO timestamp of session end (null if still running) */
+  endedAt: string | null;
+  /** Process exit code */
+  exitCode: number | null;
+  /** Duration in seconds */
+  durationSeconds: number | null;
+  /** Last 5 lines of clean output for preview */
+  lastOutputPreview: string[];
 }
 
 export interface ProjectTerminalState {

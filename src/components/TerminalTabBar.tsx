@@ -1,6 +1,6 @@
 
 import { useState, useRef, useEffect } from "react";
-import { X, Plus, Terminal } from "lucide-react";
+import { X, Plus, Terminal, Clock } from "lucide-react";
 import { useTerminals } from "@/lib/TerminalContext";
 import type { TerminalTab } from "@/lib/types/terminal";
 
@@ -19,6 +19,7 @@ function statusColor(status: TerminalTab["status"]): string {
 
 interface TerminalTabBarProps {
   onAddClicked?: () => void;
+  onHistoryClicked?: () => void;
 }
 
 function EditableTabLabel({ tab }: { tab: TerminalTab }) {
@@ -80,7 +81,7 @@ function EditableTabLabel({ tab }: { tab: TerminalTab }) {
   );
 }
 
-export function TerminalTabBar({ onAddClicked }: TerminalTabBarProps) {
+export function TerminalTabBar({ onAddClicked, onHistoryClicked }: TerminalTabBarProps) {
   const { state, removeTab, setActiveTab } = useTerminals();
   const { tabs, activeTabId } = state;
 
@@ -129,6 +130,15 @@ export function TerminalTabBar({ onAddClicked }: TerminalTabBarProps) {
           TERMINAL
         </span>
       )}
+
+      {/* History button — pushed to far right */}
+      <button
+        onClick={onHistoryClicked}
+        className="ml-auto flex items-center justify-center w-7 h-7 shrink-0 text-[var(--text-muted)] hover:text-[var(--accent)] hover:bg-[var(--bg-tertiary)] transition-colors"
+        title="Session history"
+      >
+        <Clock size={14} />
+      </button>
     </div>
   );
 }
