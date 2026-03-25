@@ -20,6 +20,8 @@ import {
   routeToCalendar,
 } from "../../src/lib/calendarAgent.js";
 
+import { expandCron } from "../../src/lib/calendarCronExpander.js";
+
 function parseBody(req) {
   return new Promise((resolve, reject) => {
     let body = "";
@@ -63,6 +65,39 @@ export async function handle(req, res, url) {
 
     if (status) {
       events = events.filter((e) => e.status === status);
+    }
+
+    // Expand recurring (cron) events into individual occurrences
+    const expand = url.searchParams.get("expand") === "true";
+    if (expand && from && to) {
+      const expanded = [];
+      const nonRecurring = [];
+
+      for (const e of events) {
+        if (e.recurrence) {
+          const occurrences = expandCron(e.recurrence, from, to);
+          for (let i = 0; i < occurrences.length; i++) {
+            const duration = e.endTime
+              ? new Date(e.endTime).getTime() - new Date(e.startTime).getTime()
+              : 0;
+            const occStart = occurrences[i];
+            expanded.push({
+              ...e,
+              id: `${e.id}_occ_${i}`,
+              startTime: occStart,
+              endTime: duration
+                ? new Date(new Date(occStart).getTime() + duration).toISOString()
+                : undefined,
+              _parentId: e.id,
+              _occurrence: true,
+            });
+          }
+        } else {
+          nonRecurring.push(e);
+        }
+      }
+
+      events = [...nonRecurring, ...expanded];
     }
 
     events.sort(

@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import YAML from "yaml";
 import { nanoid } from "nanoid";
-import { OC_HOME } from "./globalConfig";
+import { OC_HOME, SHARED_DATA_DIR } from "./globalConfig";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -100,7 +100,52 @@ const SEED_SKILLS_MD = `# Calendar Skills
 - **delete_event**: Remove an event from the calendar
 - **schedule_prompt**: Schedule an agent prompt to run at a specific time in a project
 - **set_reminder**: Create a reminder notification for the user
-- **sync_google**: Sync events with Google Calendar (requires MCP server)
+- **sync_google**: Sync events with Google Calendar (when connected)
+
+## Agent Task Execution
+
+When an agent task fires from the calendar, a real PTY session is spawned running the
+selected agent CLI (claude, codex, or gemini). The agent operates exactly as if a user
+opened a terminal — full file system access, command execution, and project awareness.
+
+### How Agent Tasks Work
+1. User creates an "Agent Task" event on the calendar with a prompt and optional project scope
+2. The cron scheduler fires at the scheduled time
+3. A PTY session spawns running the agent CLI in the target directory
+4. The prompt is sent to the agent automatically
+5. The agent has full autonomy to read files, run commands, and complete the task
+
+### Project Discovery (for auto-detect mode)
+When no explicit project is specified, the agent should:
+1. Read \`~/.open-canvas/global.yaml\` → \`projects[]\` for registered projects
+2. Each project entry has \`name\`, \`path\`, and \`lastOpened\`
+3. Infer the relevant project from the task description
+4. Read the project's \`.open-canvas/skills.md\` and \`.open-canvas/PROJECT.md\` for context
+5. cd into the project directory before starting work
+
+### Cross-Project Operations
+- Read \`~/.open-canvas/shared-data/project-manager-skills.md\` for cross-project guidance
+- Shared data directory: \`~/.open-canvas/shared-data/\`
+- After completing work, the agent may update the event status or create notifications
+
+## Calendar Connections
+
+### Connecting Google Calendar
+1. Ensure \`google_calendar_client_id\` and \`google_calendar_client_secret\` are set in API Keys
+2. POST to \`/api/calendar/connections\` with \`{action: "initiate-oauth", provider: "google"}\`
+3. User completes OAuth flow in browser
+4. Events sync automatically every 5 minutes
+
+### Syncing
+- Trigger sync: POST \`/api/calendar/sync\` with \`{action: "sync"}\`
+- Push single event: POST \`/api/calendar/sync\` with \`{action: "push-event", connectionId, eventId}\`
+- Direction options: bidirectional, pull-only, push-only
+- Conflict resolution: newest-wins (default), remote-wins, local-wins
+
+### Managing Connections
+- List: GET \`/api/calendar/connections\`
+- Remove: POST \`/api/calendar/connections\` with \`{action: "remove", connectionId}\`
+- List remote calendars: POST \`/api/calendar/connections\` with \`{action: "list-calendars", connectionId}\`
 
 ## Natural Language Parsing
 Supports expressions like:
@@ -109,6 +154,62 @@ Supports expressions like:
 - "every weekday at 9am"
 - "in 30 minutes"
 - "March 25 at noon"
+`;
+
+// ── Project Manager Seed Content ─────────────────────────────────────────────
+
+const PM_SKILLS_PATH = path.join(SHARED_DATA_DIR, "project-manager-skills.md");
+const PM_INDEX_PATH = path.join(SHARED_DATA_DIR, "index.md");
+
+const SEED_PM_SKILLS_MD = `# Project Manager Agent Skills
+
+You are an AI agent operating at the Open Canvas project-manager level.
+You can work across all registered projects.
+
+## Project Index
+Projects are registered in \`~/.open-canvas/global.yaml\` under \`projects[]\`.
+Each entry has: \`name\`, \`path\`, \`lastOpened\`.
+
+## How to Start
+1. Read \`~/.open-canvas/global.yaml\` to find all registered projects
+2. From the task prompt, determine which project(s) are relevant
+3. Read the target project's \`.open-canvas/skills.md\` for conventions
+4. Read the target project's \`.open-canvas/PROJECT.md\` for architecture context
+5. cd into the project directory and begin work
+
+## Cross-Project Operations
+- When a task spans multiple projects, plan your approach before starting
+- Use \`~/.open-canvas/shared-data/\` for data shared between projects
+- Work through projects sequentially to avoid conflicts
+
+## Reporting
+After completing a scheduled task:
+- Write results to stdout (they are captured in the session log)
+- For important outcomes, consider creating a file summary in the project
+
+## Common Patterns
+- Code review across repos: iterate through projects, run linting/tests, summarize
+- Dependency updates: check each project for outdated deps
+- Research tasks: use available tools to search, browse, and compile findings
+- Documentation sync: ensure PROJECT.md files are current
+- Status reports: gather git log summaries across projects
+`;
+
+const SEED_PM_INDEX_MD = `# Open Canvas Shared Data Index
+
+## Purpose
+This directory contains data and instructions shared across all projects.
+
+## Key Files
+- \`project-manager-skills.md\` - Instructions for agents operating at project-manager scope
+- \`skills.md\` - Global skills shared across all projects
+- \`raw/\` - Raw uploaded data files
+- \`formatted/\` - Processed/formatted data files
+
+## Related
+- Global config: \`~/.open-canvas/global.yaml\`
+- Calendar: \`~/.open-canvas/calendar/\`
+- Per-project config: \`<project>/.open-canvas/\`
 `;
 
 // ── Directory Setup ──────────────────────────────────────────────────────────
@@ -142,6 +243,17 @@ export function ensureCalendarDir(): void {
 
   if (!fs.existsSync(CALENDAR_SKILLS_PATH)) {
     fs.writeFileSync(CALENDAR_SKILLS_PATH, SEED_SKILLS_MD, "utf-8");
+  }
+
+  // Seed project-manager docs in shared-data
+  fs.mkdirSync(SHARED_DATA_DIR, { recursive: true });
+
+  if (!fs.existsSync(PM_SKILLS_PATH)) {
+    fs.writeFileSync(PM_SKILLS_PATH, SEED_PM_SKILLS_MD, "utf-8");
+  }
+
+  if (!fs.existsSync(PM_INDEX_PATH)) {
+    fs.writeFileSync(PM_INDEX_PATH, SEED_PM_INDEX_MD, "utf-8");
   }
 }
 

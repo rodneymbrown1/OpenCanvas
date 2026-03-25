@@ -125,21 +125,30 @@ function executeJob(event) {
       updateEventStatus(event.id, "triggered");
       break;
 
-    case "prompt":
+    case "prompt": {
       addNotification(
         event.id,
         `Agent prompt: ${event.title}`,
         `Sending prompt to ${action.agent || "claude"} in ${action.projectPath || "default project"}: ${action.payload}`
       );
       if (spawnSessionCallback) {
+        // Enrich prompt with project-manager context when no explicit project path
+        let prompt = action.payload;
+        if (!action.projectPath) {
+          const pmSkillsPath = path.join(OC_HOME, "shared-data", "project-manager-skills.md");
+          if (fs.existsSync(pmSkillsPath)) {
+            prompt = `[Context: You are a scheduled agent task. Read ${pmSkillsPath} for instructions on cross-project operations. Project list is in ~/.open-canvas/global.yaml under projects[]. Your working directory is ${OC_HOME}.]\n\n${action.payload}`;
+          }
+        }
         spawnSessionCallback({
           agent: action.agent || "claude",
           cwd: action.projectPath || OC_HOME,
-          prompt: action.payload,
+          prompt,
         });
       }
       updateEventStatus(event.id, "triggered");
       break;
+    }
 
     case "command":
       addNotification(

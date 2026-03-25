@@ -66,6 +66,7 @@ interface CalendarContextType {
   updateEvent: (id: string, updates: Partial<CalendarEvent>) => Promise<CalendarEvent | null>;
   deleteEvent: (id: string) => Promise<boolean>;
   dismissNotification: (id: string) => Promise<boolean>;
+  fetchEventsByRange: (from: string, to: string) => Promise<CalendarEvent[]>;
   refresh: () => Promise<void>;
 }
 
@@ -179,6 +180,21 @@ export function CalendarProvider({ children }: { children: ReactNode }) {
     [fetchEvents]
   );
 
+  const fetchEventsByRange = useCallback(
+    async (from: string, to: string): Promise<CalendarEvent[]> => {
+      try {
+        const params = new URLSearchParams({ from, to, expand: "true" });
+        const res = await fetch(`/api/calendar?${params}`);
+        if (!res.ok) return [];
+        const data = await res.json();
+        return data.events || [];
+      } catch {
+        return [];
+      }
+    },
+    []
+  );
+
   const dismissNotification = useCallback(
     async (id: string) => {
       try {
@@ -207,6 +223,7 @@ export function CalendarProvider({ children }: { children: ReactNode }) {
         updateEvent,
         deleteEvent,
         dismissNotification,
+        fetchEventsByRange,
         refresh,
       }}
     >

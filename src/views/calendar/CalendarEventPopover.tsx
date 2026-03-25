@@ -1,0 +1,179 @@
+import {
+  Clock,
+  CheckCircle,
+  AlertTriangle,
+  Bell,
+  X,
+  Trash2,
+  Bot,
+  User,
+  Terminal,
+  ExternalLink,
+  Repeat,
+} from "lucide-react";
+import type { CalendarEvent } from "@/lib/CalendarContext";
+
+const STATUS_STYLES: Record<string, string> = {
+  pending: "text-yellow-400",
+  triggered: "text-blue-400",
+  completed: "text-green-400",
+  missed: "text-red-400",
+  cancelled: "text-[var(--text-muted)]",
+};
+
+const STATUS_ICONS: Record<string, typeof Clock> = {
+  pending: Clock,
+  triggered: Bell,
+  completed: CheckCircle,
+  missed: AlertTriangle,
+  cancelled: X,
+};
+
+function formatDateTime(iso: string): string {
+  const d = new Date(iso);
+  return d.toLocaleString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function projectName(path?: string): string {
+  if (!path) return "";
+  return path.split("/").pop() || path;
+}
+
+interface CalendarEventPopoverProps {
+  event: CalendarEvent;
+  position: { x: number; y: number };
+  onClose: () => void;
+  onDelete: (id: string) => void;
+  onComplete: (id: string) => void;
+}
+
+export function CalendarEventPopover({
+  event,
+  position,
+  onClose,
+  onDelete,
+  onComplete,
+}: CalendarEventPopoverProps) {
+  const StatusIcon = STATUS_ICONS[event.status] || Clock;
+  const TargetIcon = event.target === "agent" ? Bot : event.target === "both" ? Terminal : User;
+
+  // Position the popover near the click, but keep it on screen
+  const style: React.CSSProperties = {
+    position: "fixed",
+    top: Math.min(position.y, window.innerHeight - 320),
+    left: Math.min(position.x, window.innerWidth - 340),
+    zIndex: 100,
+  };
+
+  return (
+    <>
+      <div className="fixed inset-0 z-[99]" onClick={onClose} />
+      <div
+        style={style}
+        className="w-[320px] bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl shadow-2xl p-4 space-y-3"
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className={STATUS_STYLES[event.status]}>
+              <StatusIcon size={16} />
+            </div>
+            <h3 className="font-semibold text-sm truncate">{event.title}</h3>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-[var(--text-muted)] hover:text-[var(--text-primary)] shrink-0"
+          >
+            <X size={14} />
+          </button>
+        </div>
+
+        {/* Time */}
+        <div className="text-xs text-[var(--text-muted)] space-y-0.5">
+          <div>{event.allDay ? "All day" : formatDateTime(event.startTime)}</div>
+          {event.endTime && !event.allDay && (
+            <div>to {formatDateTime(event.endTime)}</div>
+          )}
+        </div>
+
+        {/* Description */}
+        {event.description && (
+          <p className="text-xs text-[var(--text-secondary)]">{event.description}</p>
+        )}
+
+        {/* Meta tags */}
+        <div className="flex flex-wrap gap-1.5">
+          <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-[var(--bg-tertiary)] text-[var(--text-muted)]">
+            <TargetIcon size={10} />
+            {event.target === "user" ? "Me" : event.target === "agent" ? "Agent" : "Both"}
+          </span>
+          <span className={`text-xs px-2 py-0.5 rounded-full bg-[var(--bg-tertiary)] ${STATUS_STYLES[event.status]}`}>
+            {event.status}
+          </span>
+          {event.recurrence && (
+            <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400">
+              <Repeat size={10} />
+              recurring
+            </span>
+          )}
+          {event.source.projectPath && (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-[var(--bg-tertiary)] text-[var(--text-muted)]">
+              {projectName(event.source.projectPath)}
+            </span>
+          )}
+          {event.action?.agent && (
+            <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400">
+              <Bot size={10} />
+              {event.action.agent}
+            </span>
+          )}
+          {event.googleCalendarId && (
+            <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400">
+              <ExternalLink size={10} />
+              synced
+            </span>
+          )}
+        </div>
+
+        {/* Action */}
+        {event.action && (
+          <div className="bg-[var(--bg-tertiary)] rounded-lg p-2 text-xs">
+            <span className="text-[var(--accent)] font-medium">{event.action.type}:</span>{" "}
+            <span className="text-[var(--text-secondary)]">{event.action.payload}</span>
+            {event.action.projectPath && (
+              <div className="text-[var(--text-muted)] mt-0.5">
+                in {projectName(event.action.projectPath)}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Actions */}
+        <div className="flex gap-2 pt-1 border-t border-[var(--border)]">
+          {event.status === "pending" && (
+            <button
+              onClick={() => onComplete(event.id)}
+              className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg bg-green-500/10 text-green-400 hover:bg-green-500/20 transition-colors"
+            >
+              <CheckCircle size={12} />
+              Complete
+            </button>
+          )}
+          <button
+            onClick={() => onDelete(event.id)}
+            className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors"
+          >
+            <Trash2 size={12} />
+            Delete
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
