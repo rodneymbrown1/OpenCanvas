@@ -372,67 +372,14 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     setState((prev) => ({ ...prev, appStatus: "initializing", startupLog: [] }));
 
     try {
-      // Phase 1: Check if run-config.yaml exists
-      const configRes = await fetch(`/api/run-config?cwd=${encodeURIComponent(session.workDir)}`);
-      const configData = configRes.ok ? await configRes.json() : { exists: false };
-
-      // If no run-config, try auto-detect first
-      if (!configData.exists) {
-        const detectRes = await fetch("/api/run-config?action=detect", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ cwd: session.workDir }),
-        });
-        const detectData = detectRes.ok ? await detectRes.json() : { servicesFound: 0 };
-
-        if (detectData.servicesFound > 0) {
-          // Auto-detect succeeded — now start via services API
-          configData.exists = true;
-        }
-      }
-
-      // Phase 2: If run-config exists, use multi-service start
-      if (configData.exists) {
-        setState((prev) => ({ ...prev, appStatus: "building", startupLog: ["Starting services..."] }));
-        const svcRes = await fetch("/api/services?action=start", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ cwd: session.workDir }),
-        });
-        const svcData = await svcRes.json();
-
-        if (svcData.error) {
-          console.error("[startApp] service start error:", svcData.error);
-          // Fall through to legacy stack start
-        } else {
-          const services = svcData.services || {};
-          const anyRunning = Object.values(services).some(
-            (s: unknown) => (s as ServiceStatusInfo).state === "running"
-          );
-          const webService = Object.values(services).find(
-            (s: unknown) => (s as ServiceStatusInfo).port
-          ) as ServiceStatusInfo | undefined;
-
-          setState((prev) => ({
-            ...prev,
-            services: services as Record<string, ServiceStatusInfo>,
-            appStatus: anyRunning ? "running" : "building",
-            appPort: webService?.port || prev.appPort,
-            startupLog: Object.entries(services).map(
-              ([name, s]) => `${name}: ${(s as ServiceStatusInfo).state}${(s as ServiceStatusInfo).port ? ` :${(s as ServiceStatusInfo).port}` : ""}`
-            ),
-          }));
-          return; // Done — service polling will track ongoing status
-        }
-      }
-
-      // Phase 3: Legacy fallback — use old stack start (agent discovery)
+      // Ask the user's selected agent to find and start the app
       const res = await fetch("/api/stack?action=start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ agent: session.agent, cwd: session.workDir }),
       });
       const data = await res.json();
+
       if (data.error) {
         console.error("[startApp]", data.error);
         setState((prev) => ({

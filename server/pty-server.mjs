@@ -240,7 +240,19 @@ const httpServer = http.createServer(async (req, res) => {
     return;
   }
 
-  // POST /stack/start — spawn a dedicated agent session to start the project's dev stack
+  // The prompt sent to the agent to start the app — simple, human-language, not over-engineered
+  const APP_START_PROMPT = `Look at this project and start the app. Follow these steps in order:
+
+1. If there is a run.sh in the project root, execute it.
+2. If there is no run.sh but there is a project.yaml, read it to understand how to start the app, then start it.
+3. If neither exists, look in the apps/ folder. Figure out what the app is, how it works, and start it. Then create a run.sh at the project root so it can be started faster next time.
+
+Important:
+- Use dynamic port allocation. Never hardcode port numbers. Use PORT=0 or let the framework pick a random available port.
+- Print the URL where the app is running once it starts.
+- Do not ask questions. Just figure it out and run it.`;
+
+  // POST /stack/start — spawn the user's coding agent to find and start the app
   if (req.url === "/stack/start" && req.method === "POST") {
     let body = "";
     req.on("data", (chunk) => { body += chunk; });
@@ -253,188 +265,91 @@ const httpServer = http.createServer(async (req, res) => {
           return;
         }
 
-        // Check if there's already a stack session running for this cwd
+        // Check if there's already an app-start session running for this cwd
         for (const [, s] of sessions) {
-          if (s.cwd === cwd && s.role === "stack" && s.status === "running") {
+          if (s.cwd === cwd && (s.role === "app-start" || s.role === "stack") && s.status === "running") {
             res.end(JSON.stringify({ session: s, alreadyRunning: true }));
             return;
           }
         }
 
-        const session = createSession(agent, cwd);
-        session.role = "stack";
+        const agentName = agent;
+        const agentDef = AGENT_COMMANDS[agentName] || AGENT_COMMANDS.claude;
 
-        // Two-phase approach:
-        // Phase 1: Ask the agent to figure out the correct start command (fast, non-interactive)
-        // Phase 2: Run that command directly in a shell PTY (captures all output)
+        const session = createSession(agentName, cwd);
+        session.role = "app-start";
 
-        const discoverPrompt = `Look at the project in ${cwd} and its subdirectories. Find the application that has a dev server (check package.json, Makefile, Cargo.toml, manage.py, go.mod, etc). Respond with ONLY the shell command to start the dev server, including cd to the correct directory if needed. Example: "cd case-tracker && npm run dev". No explanation, just the command.`;
+        console.log(`[pty-server] app-start: spawning ${agentName} session=${session.id} cwd=${cwd}`);
 
-        // Per-agent discovery command
-        const discoverCommands = {
-          claude: ["claude", "-p", "--output-format", "text", discoverPrompt],
-          codex: ["codex", "--full-auto", "--quiet", discoverPrompt],
-          gemini: ["gemini", discoverPrompt],
-        };
-
-        const discoverCmd = discoverCommands[agent];
-        if (!discoverCmd) {
-          res.writeHead(400);
-          res.end(JSON.stringify({ error: `Unknown agent: ${agent}` }));
-          return;
-        }
-
-        console.log(`[pty-server] stack: asking ${agent} to discover start command in ${cwd}`);
-
-        // Phase 1: Discover the command (run agent in background, capture stdout)
-        const discover = new Promise((resolve, reject) => {
-          execFile(discoverCmd[0], discoverCmd.slice(1), {
-            cwd,
-            timeout: 60000,
-            env: { ...process.env, TERM: "dumb" },
-          }, (err, stdout, stderr) => {
-            if (err) {
-              console.error(`[pty-server] stack discover error:`, err.message);
-              console.error(`[pty-server] stack discover stderr:`, stderr?.substring(0, 500));
-              reject(err);
-              return;
-            }
-            // Clean the output — agent may include backticks, quotes, or extra text
-            let cmd = stdout.trim();
-            // Strip markdown code fences
-            cmd = cmd.replace(/^```\w*\n?/, "").replace(/\n?```$/, "").trim();
-            // Strip inline backticks
-            cmd = cmd.replace(/^`+/, "").replace(/`+$/, "").trim();
-            // Strip wrapping quotes
-            cmd = cmd.replace(/^["']/, "").replace(/["']$/, "").trim();
-            // Take first line if multi-line
-            cmd = cmd.split("\n")[0].trim();
-            // Remove any "Run:" or "Command:" prefix the agent might add
-            cmd = cmd.replace(/^(run|command|execute|start):\s*/i, "").trim();
-            console.log(`[pty-server] stack: agent suggested command: "${cmd}"`);
-            resolve(cmd);
-          });
+        const ptyProcess = pty.spawn(agentDef.shell, agentDef.args, {
+          name: "xterm-256color",
+          cols: 120,
+          rows: 30,
+          cwd,
+          env: {
+            ...process.env,
+            TERM: "xterm-256color",
+            COLORTERM: "truecolor",
+          },
         });
 
-        // Set status while discovering
+        session.pid = ptyProcess.pid;
         session.status = "running";
-        session.lastOutput.push(`Asking ${agent} to detect the dev server command...`);
 
-        // Helper to detect start command from filesystem (fallback)
-        function detectStartCommand(dir) {
-          const entries = fs.readdirSync(dir, { withFileTypes: true });
-          let appDir = dir;
-          for (const entry of entries) {
-            if (entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "node_modules") {
-              const pkgPath = path.join(dir, entry.name, "package.json");
-              if (fs.existsSync(pkgPath)) {
-                appDir = path.join(dir, entry.name);
-                break;
-              }
-            }
-          }
-          // Check cwd itself too
-          if (appDir === dir && fs.existsSync(path.join(dir, "package.json"))) {
-            appDir = dir;
-          }
-          if (fs.existsSync(path.join(appDir, "package.json"))) {
-            const pkg = JSON.parse(fs.readFileSync(path.join(appDir, "package.json"), "utf-8"));
-            if (pkg.scripts?.dev) return `cd "${appDir}" && npm run dev`;
-            if (pkg.scripts?.start) return `cd "${appDir}" && npm start`;
-            return `cd "${appDir}" && npm run dev`;
-          }
-          // Python
-          if (fs.existsSync(path.join(dir, "manage.py"))) return `cd "${dir}" && python manage.py runserver`;
-          // Cargo
-          if (fs.existsSync(path.join(dir, "Cargo.toml"))) return `cd "${dir}" && cargo run`;
-          // Go
-          if (fs.existsSync(path.join(dir, "go.mod"))) return `cd "${dir}" && go run .`;
-          return null;
-        }
+        activeProcesses.set(session.id, {
+          ptyProcess,
+          clients: new Set(),
+          outputBuffer: [],
+        });
 
-        function spawnStack(startCommand) {
-          session.lastOutput.push(`Running: ${startCommand}`);
-          const shell = "/bin/zsh";
-          const shellArgs = ["-l", "-c", startCommand];
-          console.log(`[pty-server] stack: spawning shell with: ${startCommand}`);
+        // Send the app-start prompt after agent initializes
+        setTimeout(() => {
+          ptyProcess.write(APP_START_PROMPT + "\r");
+          console.log(`[pty-server] app-start: sent prompt to session=${session.id}`);
+        }, 3000);
 
-          const ptyProcess = pty.spawn(shell, shellArgs, {
-            name: "xterm-256color",
-            cols: 120,
-            rows: 30,
-            cwd,
-            env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" },
-          });
-
-          session.pid = ptyProcess.pid;
-          session.status = "running";
-
-          activeProcesses.set(session.id, {
-            ptyProcess,
-            clients: new Set(),
-            outputBuffer: [],
-          });
-
-          ptyProcess.onData((data) => {
-            session.outputBytes += Buffer.byteLength(data);
-            session.outputLines += (data.match(/\n/g) || []).length;
-            const clean = stripAnsi(data);
-            const lines = clean.split("\n").filter((l) => l.trim());
-            for (const line of lines) {
-              session.lastOutput.push(line.trim());
-              if (session.lastOutput.length > 30) session.lastOutput.shift();
-              if (!session.detectedPort) {
-                const portMatch = line.match(/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d{4,5})/);
-                if (portMatch) {
-                  const port = parseInt(portMatch[1], 10);
-                  if (port >= 3000 && port <= 9999 && port !== 3000 && port !== 3001) {
-                    session.detectedPort = port;
-                    console.log(`[pty-server] stack session=${session.id} detected port: ${port}`);
-                  }
+        ptyProcess.onData((data) => {
+          session.outputBytes += Buffer.byteLength(data);
+          session.outputLines += (data.match(/\n/g) || []).length;
+          const clean = stripAnsi(data);
+          const lines = clean.split("\n").filter((l) => l.trim());
+          for (const line of lines) {
+            session.lastOutput.push(line.trim());
+            if (session.lastOutput.length > 30) session.lastOutput.shift();
+            // Detect port from agent/app output
+            if (!session.detectedPort) {
+              const portMatch = line.match(/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d{4,5})/);
+              if (portMatch) {
+                const port = parseInt(portMatch[1], 10);
+                if (port >= 1024 && port <= 65535 && port !== 3000 && port !== 3001) {
+                  session.detectedPort = port;
+                  console.log(`[pty-server] app-start session=${session.id} detected port: ${port}`);
                 }
               }
             }
-            const proc = activeProcesses.get(session.id);
-            if (proc) {
-              proc.outputBuffer.push(data);
-              if (proc.outputBuffer.length > 200) proc.outputBuffer.shift();
-              for (const client of proc.clients) {
-                if (client.readyState === client.OPEN) {
-                  client.send(JSON.stringify({ type: "output", data }));
-                }
+          }
+          const proc = activeProcesses.get(session.id);
+          if (proc) {
+            proc.outputBuffer.push(data);
+            if (proc.outputBuffer.length > 200) proc.outputBuffer.shift();
+            for (const client of proc.clients) {
+              if (client.readyState === client.OPEN) {
+                client.send(JSON.stringify({ type: "output", data }));
               }
             }
-          });
-
-          ptyProcess.onExit(({ exitCode }) => {
-            console.log(`[pty-server] stack session=${session.id} exited: code=${exitCode}`);
-            session.status = "completed";
-            session.exitCode = exitCode;
-            session.endedAt = new Date().toISOString();
-            recordSessionHistory(session);
-          });
-
-          console.log(`[pty-server] stack session spawned: id=${session.id} pid=${ptyProcess.pid}`);
-          res.end(JSON.stringify({ session }));
-        }
-
-        // Try agent discovery first, fall back to filesystem detection
-        discover.then((cmd) => {
-          spawnStack(cmd);
-        }).catch(() => {
-          console.log(`[pty-server] stack: agent discovery failed, trying filesystem fallback`);
-          const fallback = detectStartCommand(cwd);
-          if (fallback) {
-            console.log(`[pty-server] stack: fallback found: ${fallback}`);
-            spawnStack(fallback);
-          } else {
-            session.status = "failed";
-            session.lastOutput.push(`Could not detect a dev server in ${cwd}`);
-            res.writeHead(400);
-            res.end(JSON.stringify({ error: "Could not detect a startable application", session }));
           }
         });
 
+        ptyProcess.onExit(({ exitCode }) => {
+          console.log(`[pty-server] app-start session=${session.id} exited: code=${exitCode}`);
+          session.status = exitCode === 0 ? "completed" : "failed";
+          session.exitCode = exitCode;
+          session.endedAt = new Date().toISOString();
+          recordSessionHistory(session);
+        });
+
+        console.log(`[pty-server] app-start session spawned: id=${session.id} pid=${ptyProcess.pid}`);
+        res.end(JSON.stringify({ session }));
       } catch (err) {
         res.writeHead(500);
         res.end(JSON.stringify({ error: err.message }));
@@ -451,10 +366,10 @@ const httpServer = http.createServer(async (req, res) => {
       try {
         const { cwd } = JSON.parse(body);
 
-        // Find the running stack session for this cwd
+        // Find the running app-start or stack session for this cwd
         let found = null;
         for (const [id, s] of sessions) {
-          if (s.cwd === cwd && s.role === "stack" && s.status === "running") {
+          if (s.cwd === cwd && (s.role === "app-start" || s.role === "stack") && s.status === "running") {
             found = { id, session: s };
             break;
           }
@@ -489,7 +404,7 @@ const httpServer = http.createServer(async (req, res) => {
     const cwd = url.searchParams.get("cwd");
 
     for (const [, s] of sessions) {
-      if (s.cwd === cwd && s.role === "stack" && s.status === "running") {
+      if (s.cwd === cwd && (s.role === "app-start" || s.role === "stack") && s.status === "running") {
         res.end(JSON.stringify({ running: true, session: s }));
         return;
       }

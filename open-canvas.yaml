@@ -1,5 +1,5 @@
 workspace:
-  root: /Users/rodneymbrown/.open-canvas/projects/stompbox-recon
+  root: /Users/rodneymbrown/.open-canvas/projects/open-canvas-calendar
 agent:
   active: gemini
   claude:
@@ -34,7 +34,7 @@ preferences:
   default_stack: nextjs-tailwind
   theme: dark
 session:
-  lastSessionId: 08dd3362
+  lastSessionId: d7fb248f
   lastAgent: gemini
-  lastWorkDir: /Users/rodneymbrown/.open-canvas/projects/stompbox-recon
-  connectedAt: 2026-03-25T22:20:44.050Z
+  lastWorkDir: /Users/rodneymbrown/.open-canvas/projects/open-canvas-calendar
+  connectedAt: 2026-03-27T06:18:23.635Z
