@@ -9,7 +9,7 @@ import { OC_HOME, SHARED_DATA_DIR } from "./globalConfig";
 export type AgentType = "claude" | "codex" | "gemini" | "user";
 export type EventTarget = "agent" | "user" | "both";
 export type ActionType = "prompt" | "command" | "reminder";
-export type EventStatus = "pending" | "triggered" | "completed" | "missed" | "cancelled";
+export type EventStatus = "pending" | "running" | "triggered" | "completed" | "failed" | "missed" | "cancelled";
 
 export interface EventAction {
   type: ActionType;
@@ -38,8 +38,19 @@ export interface CalendarEvent {
   status: EventStatus;
   googleCalendarId?: string;
   tags?: string[];
+  execution?: ExecutionRecord;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ExecutionRecord {
+  sessionId?: string;
+  startedAt: string;
+  endedAt?: string;
+  exitCode?: number;
+  durationMs?: number;
+  outputSummary?: string; // last N lines of agent output
+  error?: string;
 }
 
 export interface CalendarNotification {

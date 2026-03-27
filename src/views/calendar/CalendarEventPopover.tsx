@@ -10,21 +10,26 @@ import {
   Terminal,
   ExternalLink,
   Repeat,
+  Pencil,
 } from "lucide-react";
 import type { CalendarEvent } from "@/lib/CalendarContext";
 
 const STATUS_STYLES: Record<string, string> = {
   pending: "text-yellow-400",
+  running: "text-cyan-400",
   triggered: "text-blue-400",
   completed: "text-green-400",
+  failed: "text-orange-400",
   missed: "text-red-400",
   cancelled: "text-[var(--text-muted)]",
 };
 
 const STATUS_ICONS: Record<string, typeof Clock> = {
   pending: Clock,
+  running: Terminal,
   triggered: Bell,
   completed: CheckCircle,
+  failed: AlertTriangle,
   missed: AlertTriangle,
   cancelled: X,
 };
@@ -51,6 +56,7 @@ interface CalendarEventPopoverProps {
   onClose: () => void;
   onDelete: (id: string) => void;
   onComplete: (id: string) => void;
+  onEdit?: (event: CalendarEvent) => void;
 }
 
 export function CalendarEventPopover({
@@ -59,6 +65,7 @@ export function CalendarEventPopover({
   onClose,
   onDelete,
   onComplete,
+  onEdit,
 }: CalendarEventPopoverProps) {
   const StatusIcon = STATUS_ICONS[event.status] || Clock;
   const TargetIcon = event.target === "agent" ? Bot : event.target === "both" ? Terminal : User;
@@ -154,8 +161,39 @@ export function CalendarEventPopover({
           </div>
         )}
 
+        {/* Execution info */}
+        {event.execution && (
+          <div className="bg-[var(--bg-tertiary)] rounded-lg p-2 text-xs space-y-0.5">
+            <div className="text-[var(--text-muted)]">
+              {event.execution.durationMs != null && (
+                <span>Duration: {Math.round(event.execution.durationMs / 1000)}s</span>
+              )}
+              {event.execution.exitCode != null && (
+                <span className="ml-2">Exit: {event.execution.exitCode}</span>
+              )}
+            </div>
+            {event.execution.error && (
+              <div className="text-orange-400">{event.execution.error}</div>
+            )}
+            {event.execution.outputSummary && (
+              <div className="text-[var(--text-muted)] truncate" title={event.execution.outputSummary}>
+                {event.execution.outputSummary.split("\n").slice(-1)[0]}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Actions */}
         <div className="flex gap-2 pt-1 border-t border-[var(--border)]">
+          {(event.status === "pending" || event.status === "failed") && onEdit && (
+            <button
+              onClick={() => { onEdit(event); onClose(); }}
+              className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg bg-[var(--accent)]/10 text-[var(--accent)] hover:bg-[var(--accent)]/20 transition-colors"
+            >
+              <Pencil size={12} />
+              Edit
+            </button>
+          )}
           {event.status === "pending" && (
             <button
               onClick={() => onComplete(event.id)}

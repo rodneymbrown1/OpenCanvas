@@ -7,7 +7,15 @@
  * Job types:
  *   - "reminder" → writes notification to notifications.yaml
  *   - "prompt"   → spawns a PTY session with the prompt (via callback)
- *   - "command"  → executes a shell command in the target project
+ *   - "command"  → executes a shell command in the target project (allowlisted)
+ *
+ * Hardening:
+ *   - Project-level locking prevents concurrent agent tasks on the same project
+ *   - Agent sessions have a configurable timeout (default: 30 minutes)
+ *   - Prompt delivery waits for agent ready signal instead of hardcoded delay
+ *   - Execution audit records are written to event history
+ *   - Command payloads are validated against an allowlist
+ *   - Full status lifecycle: pending → running → completed/failed
  */
 
 import cron from "node-cron";
@@ -24,9 +32,38 @@ const CALENDAR_DIR = path.join(OC_HOME, "calendar");
 const CALENDAR_PATH = path.join(CALENDAR_DIR, "calendar.yaml");
 const NOTIFICATIONS_PATH = path.join(CALENDAR_DIR, "notifications.yaml");
 const CRON_STATE_PATH = path.join(CALENDAR_DIR, "cron-state.yaml");
+const HISTORY_PATH = path.join(CALENDAR_DIR, "history.yaml");
+
+// ── Configuration ───────────────────────────────────────────────────────────
+
+const AGENT_SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes default
+const COMMAND_TIMEOUT_MS = 60_000; // 60 seconds for command actions
+
+// Allowed command prefixes for "command" action type.
+// Commands must start with one of these to be executed.
+const COMMAND_ALLOWLIST = [
+  "npm ", "npx ", "yarn ", "pnpm ",
+  "node ", "python ", "python3 ",
+  "git ", "gh ",
+  "ls ", "cat ", "head ", "tail ", "wc ",
+  "curl ", "wget ",
+  "echo ", "printf ",
+  "test ", "jest ", "vitest ", "pytest ",
+  "eslint ", "prettier ", "tsc ",
+  "docker ", "docker-compose ",
+  "make ", "cargo ", "go ",
+];
+
+// ── Active state ────────────────────────────────────────────────────────────
 
 // Active cron jobs: eventId -> cron.ScheduledTask
 const activeJobs = new Map();
+
+// Project locks: projectPath -> { eventId, sessionId }
+const projectLocks = new Map();
+
+// Active agent sessions: eventId -> { ptyProcess, timeout, session }
+const activeAgentSessions = new Map();
 
 // Callback for spawning PTY sessions (set by pty-server)
 let spawnSessionCallback = null;
@@ -93,14 +130,82 @@ function addNotification(eventId, title, message) {
 
 // ── Event Update ─────────────────────────────────────────────────────────────
 
-function updateEventStatus(eventId, status) {
+function updateEventStatus(eventId, status, execution) {
   const data = readYaml(CALENDAR_PATH);
   if (!data?.events) return;
   const event = data.events.find((e) => e.id === eventId);
   if (event) {
     event.status = status;
     event.updatedAt = new Date().toISOString();
+    if (execution) {
+      event.execution = { ...(event.execution || {}), ...execution };
+    }
     writeYaml(CALENDAR_PATH, data);
+  }
+}
+
+// ── Execution Audit ─────────────────────────────────────────────────────────
+
+function writeAuditRecord(event, execution) {
+  const data = readYaml(HISTORY_PATH) || { events: [] };
+  const history = data.events || [];
+
+  history.push({
+    ...event,
+    execution,
+    archivedAt: new Date().toISOString(),
+  });
+
+  // Keep last 500 history entries
+  if (history.length > 500) {
+    data.events = history.slice(-500);
+  } else {
+    data.events = history;
+  }
+
+  writeYaml(HISTORY_PATH, data);
+  console.log(`[cron-scheduler] audit: ${event.id} — ${execution.exitCode === 0 ? "success" : "exit=" + execution.exitCode}`);
+}
+
+// ── Project Locking ─────────────────────────────────────────────────────────
+
+function acquireProjectLock(projectPath, eventId) {
+  const lockKey = projectPath || "__global__";
+  if (projectLocks.has(lockKey)) {
+    const holder = projectLocks.get(lockKey);
+    console.log(`[cron-scheduler] project locked: ${lockKey} held by event ${holder.eventId}`);
+    return false;
+  }
+  projectLocks.set(lockKey, { eventId, acquiredAt: new Date().toISOString() });
+  console.log(`[cron-scheduler] lock acquired: ${lockKey} by event ${eventId}`);
+  return true;
+}
+
+function releaseProjectLock(projectPath, eventId) {
+  const lockKey = projectPath || "__global__";
+  const holder = projectLocks.get(lockKey);
+  if (holder && holder.eventId === eventId) {
+    projectLocks.delete(lockKey);
+    console.log(`[cron-scheduler] lock released: ${lockKey} by event ${eventId}`);
+  }
+}
+
+// ── Command Validation ──────────────────────────────────────────────────────
+
+function isCommandAllowed(payload) {
+  const trimmed = payload.trim();
+  return COMMAND_ALLOWLIST.some((prefix) => trimmed.startsWith(prefix));
+}
+
+// ── Agent Installation Check ────────────────────────────────────────────────
+
+function isAgentAvailable(agentName) {
+  try {
+    const { execSync } = require("node:child_process");
+    const result = execSync(`which ${agentName} 2>/dev/null`, { timeout: 3000, encoding: "utf-8" });
+    return result.trim().length > 0;
+  } catch {
+    return false;
   }
 }
 
@@ -126,11 +231,46 @@ function executeJob(event) {
       break;
 
     case "prompt": {
+      const agentName = action.agent || "claude";
+
+      // ── Gap 2: Verify agent is installed before spawning ──
+      if (!isAgentAvailable(agentName)) {
+        const errMsg = `Agent "${agentName}" is not installed. Install it or choose a different agent.`;
+        console.error(`[cron-scheduler] ${errMsg}`);
+        addNotification(event.id, `Failed: ${event.title}`, errMsg);
+        updateEventStatus(event.id, "failed", {
+          startedAt: new Date().toISOString(),
+          endedAt: new Date().toISOString(),
+          error: errMsg,
+        });
+        return;
+      }
+
+      // ── Gap 5: Acquire project lock ──
+      const projectPath = action.projectPath || OC_HOME;
+      if (!acquireProjectLock(projectPath, event.id)) {
+        const errMsg = `Project "${projectPath}" is locked by another running task. Skipping.`;
+        addNotification(event.id, `Skipped: ${event.title}`, errMsg);
+        updateEventStatus(event.id, "missed", {
+          startedAt: new Date().toISOString(),
+          endedAt: new Date().toISOString(),
+          error: errMsg,
+        });
+        return;
+      }
+
+      // ── Gap 12: Set status to "running" ──
+      const executionStart = new Date().toISOString();
+      updateEventStatus(event.id, "running", {
+        startedAt: executionStart,
+      });
+
       addNotification(
         event.id,
-        `Agent prompt: ${event.title}`,
-        `Sending prompt to ${action.agent || "claude"} in ${action.projectPath || "default project"}: ${action.payload}`
+        `Agent task started: ${event.title}`,
+        `Running ${agentName} in ${projectPath}: ${action.payload}`
       );
+
       if (spawnSessionCallback) {
         // Build context-enriched prompt with calendar event metadata
         const contextLines = [
@@ -145,43 +285,161 @@ function executeJob(event) {
 
         let prompt = `${contextLines.join("\n")}\n\n${action.payload}`;
 
-        // Enrich with project-manager context when no explicit project path
-        if (!action.projectPath) {
+        // Enrich with Open Canvas agent skill when no explicit project path
+        const agentSkillPath = path.join(CALENDAR_DIR, "open-canvas-agent-skill.md");
+        if (!action.projectPath && fs.existsSync(agentSkillPath)) {
+          const skill = fs.readFileSync(agentSkillPath, "utf-8");
+          prompt = `${skill}\n\n${prompt}`;
+        } else if (!action.projectPath) {
+          // Fallback to project-manager skills
           const pmSkillsPath = path.join(OC_HOME, "shared-data", "project-manager-skills.md");
           if (fs.existsSync(pmSkillsPath)) {
             prompt = `[Context: You are a scheduled agent task. Read ${pmSkillsPath} for instructions on cross-project operations. Project list is in ~/.open-canvas/global.yaml under projects[]. Your working directory is ${OC_HOME}.]\n\n${prompt}`;
           }
         }
+
+        // ── Gap 3 + 4 + 6: Spawn with exit tracking, timeout, and ready detection ──
         spawnSessionCallback({
-          agent: action.agent || "claude",
-          cwd: action.projectPath || OC_HOME,
+          agent: agentName,
+          cwd: projectPath,
           prompt,
+          eventId: event.id,
+          timeout: AGENT_SESSION_TIMEOUT_MS,
+          onComplete: (result) => {
+            // Release project lock
+            releaseProjectLock(projectPath, event.id);
+            activeAgentSessions.delete(event.id);
+
+            const endedAt = new Date().toISOString();
+            const startMs = new Date(executionStart).getTime();
+            const durationMs = Date.now() - startMs;
+
+            const execution = {
+              sessionId: result.sessionId,
+              startedAt: executionStart,
+              endedAt,
+              exitCode: result.exitCode,
+              durationMs,
+              outputSummary: result.lastOutput?.join("\n")?.slice(-500) || "",
+              error: result.timedOut ? `Timed out after ${AGENT_SESSION_TIMEOUT_MS / 60000}m` : undefined,
+            };
+
+            // ── Gap 12: Set final status based on exit ──
+            const finalStatus = result.timedOut
+              ? "failed"
+              : result.exitCode === 0
+                ? "completed"
+                : "failed";
+
+            updateEventStatus(event.id, finalStatus, execution);
+
+            // ── Gap 10: Write audit trail ──
+            writeAuditRecord(event, execution);
+
+            // ── Gap 3: Completion notification ──
+            const statusLabel = result.timedOut
+              ? "timed out"
+              : result.exitCode === 0
+                ? "completed"
+                : `failed (exit ${result.exitCode})`;
+
+            addNotification(
+              event.id,
+              `Task ${statusLabel}: ${event.title}`,
+              `Agent ${agentName} ${statusLabel} in ${Math.round(durationMs / 1000)}s.${
+                result.lastOutput?.length
+                  ? "\nLast output: " + result.lastOutput.slice(-3).join(" | ").slice(0, 200)
+                  : ""
+              }`
+            );
+          },
         });
+      } else {
+        // No spawn callback — can't execute
+        releaseProjectLock(projectPath, event.id);
+        const errMsg = "PTY spawn callback not available";
+        updateEventStatus(event.id, "failed", {
+          startedAt: executionStart,
+          endedAt: new Date().toISOString(),
+          error: errMsg,
+        });
+        addNotification(event.id, `Failed: ${event.title}`, errMsg);
       }
-      updateEventStatus(event.id, "triggered");
       break;
     }
 
-    case "command":
+    case "command": {
+      // ── Gap 11: Validate command against allowlist ──
+      if (!isCommandAllowed(action.payload)) {
+        const errMsg = `Command blocked: "${action.payload.slice(0, 60)}..." is not in the allowed command list. Allowed prefixes: ${COMMAND_ALLOWLIST.slice(0, 5).join(", ")}...`;
+        console.error(`[cron-scheduler] ${errMsg}`);
+        addNotification(event.id, `Blocked: ${event.title}`, errMsg);
+        updateEventStatus(event.id, "failed", {
+          startedAt: new Date().toISOString(),
+          endedAt: new Date().toISOString(),
+          error: errMsg,
+        });
+        return;
+      }
+
+      const cmdStart = new Date().toISOString();
+      updateEventStatus(event.id, "running", { startedAt: cmdStart });
+
       addNotification(
         event.id,
         `Command: ${event.title}`,
         `Executing: ${action.payload} in ${action.projectPath || "home"}`
       );
+
       const cwd = action.projectPath || OC_HOME;
-      execFile("/bin/zsh", ["-l", "-c", action.payload], { cwd, timeout: 60_000 }, (err, stdout, stderr) => {
+
+      // Validate cwd exists
+      if (!fs.existsSync(cwd)) {
+        const errMsg = `Working directory does not exist: ${cwd}`;
+        updateEventStatus(event.id, "failed", {
+          startedAt: cmdStart,
+          endedAt: new Date().toISOString(),
+          error: errMsg,
+        });
+        addNotification(event.id, `Failed: ${event.title}`, errMsg);
+        return;
+      }
+
+      execFile("/bin/zsh", ["-l", "-c", action.payload], { cwd, timeout: COMMAND_TIMEOUT_MS }, (err, stdout, stderr) => {
+        const endedAt = new Date().toISOString();
+        const durationMs = Date.now() - new Date(cmdStart).getTime();
+
         if (err) {
           console.error(`[cron-scheduler] command failed for ${event.id}:`, err.message);
+          const execution = {
+            startedAt: cmdStart,
+            endedAt,
+            exitCode: err.code || 1,
+            durationMs,
+            outputSummary: (stderr || err.message).slice(0, 500),
+            error: err.message,
+          };
+          updateEventStatus(event.id, "failed", execution);
+          writeAuditRecord(event, execution);
           addNotification(event.id, `Command failed: ${event.title}`, stderr || err.message);
         } else {
           console.log(`[cron-scheduler] command succeeded for ${event.id}`);
+          const execution = {
+            startedAt: cmdStart,
+            endedAt,
+            exitCode: 0,
+            durationMs,
+            outputSummary: stdout.trim().slice(0, 500),
+          };
+          updateEventStatus(event.id, "completed", execution);
+          writeAuditRecord(event, execution);
           if (stdout.trim()) {
-            addNotification(event.id, `Command output: ${event.title}`, stdout.trim().slice(0, 500));
+            addNotification(event.id, `Command done: ${event.title}`, stdout.trim().slice(0, 500));
           }
         }
       });
-      updateEventStatus(event.id, "triggered");
       break;
+    }
   }
 
   // Update cron state
@@ -201,8 +459,8 @@ function stopAllJobs() {
 }
 
 function scheduleEvent(event) {
-  // Skip completed/cancelled events
-  if (event.status === "completed" || event.status === "cancelled") return;
+  // Skip terminal statuses
+  if (["completed", "cancelled", "running"].includes(event.status)) return;
 
   // Recurring event with cron expression
   if (event.recurrence && cron.validate(event.recurrence)) {
@@ -231,15 +489,11 @@ function scheduleEvent(event) {
     return;
   }
 
-  // Use setTimeout for one-time future events (more accurate than cron for specific times)
+  // Use setTimeout for one-time future events
   const timeout = setTimeout(() => {
     console.log(`[cron-scheduler] one-time job fired: ${event.id} — ${event.title}`);
     executeJob(event);
     activeJobs.delete(event.id);
-    // Mark as completed for non-recurring
-    if (!event.recurrence) {
-      updateEventStatus(event.id, "completed");
-    }
   }, delayMs);
 
   // Wrap timeout in an object with stop() for consistency
@@ -323,6 +577,8 @@ export function stopCronScheduler() {
 export function getCronStatus() {
   return {
     activeJobs: activeJobs.size,
+    projectLocks: Object.fromEntries(projectLocks),
+    activeSessions: activeAgentSessions.size,
     jobs: readCronState(),
     events: readEvents().length,
   };

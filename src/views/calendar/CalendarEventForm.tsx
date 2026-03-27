@@ -7,6 +7,7 @@ interface CalendarEventFormProps {
   onCancel: () => void;
   initialStart?: string;
   initialEnd?: string;
+  editEvent?: CalendarEvent;
 }
 
 interface Project {
@@ -15,7 +16,17 @@ interface Project {
   exists: boolean;
 }
 
-const AGENTS = ["claude", "codex", "gemini"] as const;
+interface AgentInfo {
+  id: string;
+  label: string;
+  installed: boolean;
+}
+
+const FALLBACK_AGENTS: AgentInfo[] = [
+  { id: "claude", label: "Claude Code", installed: true },
+  { id: "codex", label: "Codex", installed: false },
+  { id: "gemini", label: "Gemini", installed: false },
+];
 
 function toLocalDatetimeValue(iso: string): string {
   const d = new Date(iso);
@@ -23,31 +34,48 @@ function toLocalDatetimeValue(iso: string): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-export function CalendarEventForm({ onSubmit, onCancel, initialStart, initialEnd }: CalendarEventFormProps) {
-  const [isAgentEvent, setIsAgentEvent] = useState(false);
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [startTime, setStartTime] = useState(initialStart ? toLocalDatetimeValue(initialStart) : "");
-  const [endTime, setEndTime] = useState(initialEnd ? toLocalDatetimeValue(initialEnd) : "");
-  const [allDay, setAllDay] = useState(false);
-  const [recurrence, setRecurrence] = useState("");
+export function CalendarEventForm({ onSubmit, onCancel, initialStart, initialEnd, editEvent }: CalendarEventFormProps) {
+  const isEdit = !!editEvent;
+  const [isAgentEvent, setIsAgentEvent] = useState(editEvent?.target === "agent" || editEvent?.target === "both" || false);
+  const [title, setTitle] = useState(editEvent?.title || "");
+  const [description, setDescription] = useState(editEvent?.description || "");
+  const [startTime, setStartTime] = useState(
+    editEvent?.startTime ? toLocalDatetimeValue(editEvent.startTime) : initialStart ? toLocalDatetimeValue(initialStart) : ""
+  );
+  const [endTime, setEndTime] = useState(
+    editEvent?.endTime ? toLocalDatetimeValue(editEvent.endTime) : initialEnd ? toLocalDatetimeValue(initialEnd) : ""
+  );
+  const [allDay, setAllDay] = useState(editEvent?.allDay || false);
+  const [recurrence, setRecurrence] = useState(editEvent?.recurrence || "");
 
   // Regular event fields
-  const [reminderMessage, setReminderMessage] = useState("");
+  const [reminderMessage, setReminderMessage] = useState(
+    editEvent?.action?.type === "reminder" ? editEvent.action.payload : ""
+  );
 
   // Agent event fields
-  const [agentChoice, setAgentChoice] = useState<string>("claude");
-  const [agentPrompt, setAgentPrompt] = useState("");
-  const [projectScope, setProjectScope] = useState("");
+  const [agentChoice, setAgentChoice] = useState<string>(editEvent?.action?.agent || "claude");
+  const [agentPrompt, setAgentPrompt] = useState(editEvent?.action?.type === "prompt" ? editEvent.action.payload : "");
+  const [projectScope, setProjectScope] = useState(editEvent?.action?.projectPath || "");
   const [projects, setProjects] = useState<Project[]>([]);
+  const [agents, setAgents] = useState<AgentInfo[]>(FALLBACK_AGENTS);
 
   useEffect(() => {
-    fetch("/api/projects")
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.projects) setProjects(data.projects.filter((p: Project) => p.exists));
-      })
-      .catch(() => {});
+    // Fetch installed agents and projects in parallel
+    Promise.all([
+      fetch("/api/agents").then((r) => r.json()).catch(() => null),
+      fetch("/api/projects").then((r) => r.json()).catch(() => null),
+    ]).then(([agentData, projectData]) => {
+      if (agentData?.agents) {
+        setAgents(agentData.agents);
+        // Default to first installed agent
+        const firstInstalled = agentData.agents.find((a: AgentInfo) => a.installed);
+        if (firstInstalled) setAgentChoice(firstInstalled.id);
+      }
+      if (projectData?.projects) {
+        setProjects(projectData.projects.filter((p: Project) => p.exists));
+      }
+    });
   }, []);
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -105,7 +133,7 @@ export function CalendarEventForm({ onSubmit, onCancel, initialStart, initialEnd
         className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-5 space-y-3 w-[440px] max-h-[80vh] overflow-auto shadow-2xl"
       >
         <div className="flex items-center justify-between">
-          <h3 className="font-semibold text-sm">New Event</h3>
+          <h3 className="font-semibold text-sm">{isEdit ? "Edit Event" : "New Event"}</h3>
           <button
             type="button"
             onClick={onCancel}
@@ -148,21 +176,28 @@ export function CalendarEventForm({ onSubmit, onCancel, initialStart, initialEnd
         {/* Agent-specific fields */}
         {isAgentEvent && (
           <>
-            {/* Agent selector */}
+            {/* Agent selector — only installed agents are selectable */}
             <div>
               <label className="text-xs text-[var(--text-muted)] mb-1.5 block">Agent</label>
               <div className="flex gap-1">
-                {AGENTS.map((agent) => (
+                {agents.map((agent) => (
                   <button
-                    key={agent}
+                    key={agent.id}
                     type="button"
-                    onClick={() => setAgentChoice(agent)}
-                    className={`flex-1 ${pillClass(agentChoice === agent)}`}
+                    onClick={() => agent.installed && setAgentChoice(agent.id)}
+                    disabled={!agent.installed}
+                    title={agent.installed ? agent.label : `${agent.label} is not installed`}
+                    className={`flex-1 ${pillClass(agentChoice === agent.id)} ${
+                      !agent.installed ? "opacity-30 cursor-not-allowed line-through" : ""
+                    }`}
                   >
-                    {agent}
+                    {agent.id}
                   </button>
                 ))}
               </div>
+              {!agents.some((a) => a.installed) && (
+                <p className="text-[10px] text-red-400 mt-1">No agents installed. Install claude, codex, or gemini CLI first.</p>
+              )}
             </div>
 
             {/* Agent prompt */}
@@ -269,7 +304,7 @@ export function CalendarEventForm({ onSubmit, onCancel, initialStart, initialEnd
           type="submit"
           className="w-full py-2 text-sm font-medium rounded-lg bg-[var(--accent)] text-white hover:opacity-90 transition-opacity"
         >
-          {isAgentEvent ? "Schedule Agent Task" : "Create Event"}
+          {isEdit ? "Save Changes" : isAgentEvent ? "Schedule Agent Task" : "Create Event"}
         </button>
       </form>
     </div>

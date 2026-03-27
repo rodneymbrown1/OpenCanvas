@@ -37,6 +37,8 @@ import {
   markRunning as registryMarkRunning,
   markStopped as registryMarkStopped,
   releaseProject as registryReleaseProject,
+  allocatePort as registryAllocatePort,
+  getProjectPorts as registryGetProjectPorts,
 } from "./port-registry.mjs";
 
 // ── API Route Modules (migrated from Next.js API routes) ──────────────────
@@ -233,9 +235,18 @@ const httpServer = http.createServer(async (req, res) => {
       req.url = apiPath + url.search;
       // Fall through to PTY voice-job handler below
     }
-    // Handle /api/stack
+    // Handle /api/stack — map ?action=start/stop to /stack/start, /stack/stop
+    // and GET /api/stack?cwd=... to /stack/status?cwd=...
     else if (apiPath.startsWith("/stack")) {
-      req.url = apiPath + url.search;
+      const action = url.searchParams.get("action");
+      if (action) {
+        url.searchParams.delete("action");
+        req.url = `/stack/${action}` + (url.search ? url.search : "");
+      } else if (req.method === "GET") {
+        req.url = `/stack/status` + url.search;
+      } else {
+        req.url = apiPath + url.search;
+      }
       // Fall through to existing PTY stack handlers below
     }
     // Handle /api/pty-status — these are in the ports route module
@@ -272,14 +283,16 @@ const httpServer = http.createServer(async (req, res) => {
   // The prompt sent to the agent to start the app — simple, human-language, not over-engineered
   const APP_START_PROMPT = `Look at this project and start the app. Follow these steps in order:
 
-1. If there is a run.sh in the project root, execute it.
-2. If there is no run.sh but there is a project.yaml, read it to understand how to start the app, then start it.
-3. If neither exists, look in the apps/ folder. Figure out what the app is, how it works, and start it. Then create a run.sh at the project root so it can be started faster next time.
+1. Check if the app is already running (lsof -iTCP -sTCP:LISTEN -P -n | grep "$OC_PROJECT"). If running, kill it first.
+2. If there is a run.sh in the project root, execute it.
+3. If there is no run.sh but there is a project.yaml, read it to understand how to start the app, then start it.
+4. If neither exists, look in the apps/ folder. Figure out what the app is, how it works, and start it. Then create a run.sh at the project root so it can be started faster next time.
 
 Important:
 - Use dynamic port allocation. Never hardcode port numbers. Use PORT=0 or let the framework pick a random available port.
 - Print the URL where the app is running once it starts.
-- Do not ask questions. Just figure it out and run it.`;
+- Do not ask questions. Just figure it out and run it.
+- Your process has OC_PROJECT and OC_SERVICE env vars set. These tag the process for Open Canvas port management.`;
 
   // POST /stack/start — spawn the user's coding agent to find and start the app
   if (req.url === "/stack/start" && req.method === "POST") {
@@ -294,11 +307,28 @@ Important:
           return;
         }
 
-        // Check if there's already an app-start session running for this cwd
-        for (const [, s] of sessions) {
+        // Kill any existing app-start/stack sessions for this cwd (kill-and-restart)
+        for (const [id, s] of sessions) {
           if (s.cwd === cwd && (s.role === "app-start" || s.role === "stack") && s.status === "running") {
-            res.end(JSON.stringify({ session: s, alreadyRunning: true }));
-            return;
+            const proc = activeProcesses.get(id);
+            if (proc?.ptyProcess) {
+              console.log(`[pty-server] app-start: killing existing session=${id}`);
+              proc.ptyProcess.kill();
+              s.status = "completed";
+              s.endedAt = new Date().toISOString();
+              if (s.detectedPort) {
+                try { registryMarkStopped(s.detectedPort); } catch {}
+              }
+            }
+          }
+        }
+
+        // Kill any orphaned app processes registered to this project
+        const projectPorts = registryGetProjectPorts(cwd);
+        for (const alloc of projectPorts) {
+          if (alloc.status === "running" && alloc.pid) {
+            try { process.kill(alloc.pid, "SIGTERM"); } catch {}
+            try { registryMarkStopped(alloc.port); } catch {}
           }
         }
 
@@ -310,6 +340,7 @@ Important:
 
         console.log(`[pty-server] app-start: spawning ${agentName} session=${session.id} cwd=${cwd}`);
 
+        const projectName = path.basename(cwd);
         const ptyProcess = pty.spawn(agentDef.shell, agentDef.args, {
           name: "xterm-256color",
           cols: 120,
@@ -319,6 +350,8 @@ Important:
             ...process.env,
             TERM: "xterm-256color",
             COLORTERM: "truecolor",
+            OC_PROJECT: projectName,
+            OC_SERVICE: "app",
           },
         });
 
@@ -353,6 +386,10 @@ Important:
                 if (port >= 1024 && port <= 65535 && port !== 3000 && port !== 3001) {
                   session.detectedPort = port;
                   console.log(`[pty-server] app-start session=${session.id} detected port: ${port}`);
+                  // Register in port registry (same as services path)
+                  registryAllocatePort(projectName, cwd, "app", "web", port)
+                    .then(() => registryMarkRunning(port, ptyProcess.pid, session.id))
+                    .catch((err) => console.error(`[pty-server] app-start registry failed:`, err.message));
                 }
               }
             }
@@ -375,6 +412,9 @@ Important:
           session.exitCode = exitCode;
           session.endedAt = new Date().toISOString();
           recordSessionHistory(session);
+          if (session.detectedPort) {
+            try { registryMarkStopped(session.detectedPort); } catch {}
+          }
         });
 
         console.log(`[pty-server] app-start session spawned: id=${session.id} pid=${ptyProcess.pid}`);
@@ -416,6 +456,9 @@ Important:
           proc.ptyProcess.kill();
           found.session.status = "completed";
           found.session.endedAt = new Date().toISOString();
+          if (found.session.detectedPort) {
+            try { registryMarkStopped(found.session.detectedPort); } catch {}
+          }
         }
 
         res.end(JSON.stringify({ stopped: true, sessionId: found.id }));
@@ -1133,25 +1176,105 @@ httpServer.listen(PORT, () => {
   // Initialize cron scheduler for calendar events
   initCronScheduler((opts) => {
     // Callback to spawn a PTY session when a cron job fires a "prompt" action
-    console.log(`[pty-server] cron spawning session: agent=${opts.agent}, cwd=${opts.cwd}`);
+    console.log(`[pty-server] cron spawning session: agent=${opts.agent}, cwd=${opts.cwd}, event=${opts.eventId || "manual"}`);
+
+    // Validate cwd exists
+    if (!fs.existsSync(opts.cwd)) {
+      console.error(`[pty-server] cron spawn aborted: cwd does not exist: ${opts.cwd}`);
+      if (opts.onComplete) {
+        opts.onComplete({ exitCode: 1, timedOut: false, lastOutput: [`Error: directory ${opts.cwd} does not exist`] });
+      }
+      return;
+    }
+
     const session = createSession(opts.agent, opts.cwd);
     session.role = "cron";
+    if (opts.eventId) session.eventId = opts.eventId;
+
     const agentCmd = getAgentArgs(opts.agent);
     const ptyProcess = pty.spawn(agentCmd.shell, agentCmd.args, {
       name: "xterm-256color",
       cols: 120,
       rows: 30,
       cwd: opts.cwd,
-      env: { ...process.env, TERM: "xterm-256color" },
+      env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" },
     });
     session.pid = ptyProcess.pid;
     session.status = "running";
-    // Send the prompt after a short delay to let the agent initialize
-    setTimeout(() => {
-      if (opts.prompt) {
-        ptyProcess.write(opts.prompt + "\r");
+
+    // Track the process
+    activeProcesses.set(session.id, {
+      ptyProcess,
+      clients: new Set(),
+      outputBuffer: [],
+    });
+
+    let promptSent = false;
+    let sessionTimeout = null;
+    let completionCalled = false;
+
+    function callCompletion(result) {
+      if (completionCalled) return;
+      completionCalled = true;
+      if (sessionTimeout) clearTimeout(sessionTimeout);
+      if (opts.onComplete) {
+        opts.onComplete({
+          sessionId: session.id,
+          exitCode: result.exitCode ?? -1,
+          timedOut: result.timedOut || false,
+          lastOutput: session.lastOutput,
+        });
       }
-    }, 3000);
+    }
+
+    // ── Gap 4: Session timeout ──
+    if (opts.timeout) {
+      sessionTimeout = setTimeout(() => {
+        if (session.status === "running") {
+          console.log(`[pty-server] cron session timeout: ${session.id} after ${opts.timeout / 60000}m`);
+          try { ptyProcess.kill(); } catch {}
+          session.status = "exited";
+          session.exitCode = -1;
+          session.endedAt = new Date().toISOString();
+          recordSessionHistory(session);
+          callCompletion({ exitCode: -1, timedOut: true });
+        }
+      }, opts.timeout);
+    }
+
+    // ── Gap 6: Wait for agent ready signal before sending prompt ──
+    // Instead of a hardcoded 3s delay, detect when the agent is ready
+    // by watching for common ready indicators in the output
+    const READY_PATTERNS = [
+      /\$\s*$/,          // shell prompt
+      />\s*$/,           // claude/generic prompt
+      /❯\s*$/,           // zsh prompt
+      /waiting/i,        // "waiting for input"
+      /ready/i,          // "ready"
+      /\?\s*$/,          // question prompt
+    ];
+    const MAX_READY_WAIT_MS = 15000; // 15s max wait for ready signal
+    let readyTimeout = null;
+
+    function sendPromptWhenReady() {
+      if (promptSent || !opts.prompt) return;
+      promptSent = true;
+      if (readyTimeout) clearTimeout(readyTimeout);
+      // Small buffer after detecting ready to avoid racing
+      setTimeout(() => {
+        ptyProcess.write(opts.prompt + "\r");
+        console.log(`[pty-server] cron prompt delivered to session ${session.id}`);
+      }, 300);
+    }
+
+    // Fallback: if we don't detect a ready signal in time, send anyway
+    readyTimeout = setTimeout(() => {
+      if (!promptSent) {
+        console.log(`[pty-server] cron ready-wait timeout, sending prompt to ${session.id}`);
+        sendPromptWhenReady();
+      }
+    }, MAX_READY_WAIT_MS);
+
     ptyProcess.onData((data) => {
       session.outputBytes += data.length;
       session.outputLines += (data.match(/\n/g) || []).length;
@@ -1162,12 +1285,30 @@ httpServer.listen(PORT, () => {
           session.lastOutput = session.lastOutput.slice(-20);
         }
       }
+
+      // Check for ready signal to send prompt
+      if (!promptSent && READY_PATTERNS.some((p) => p.test(clean))) {
+        sendPromptWhenReady();
+      }
+
+      // Buffer for reconnection
+      const proc = activeProcesses.get(session.id);
+      if (proc) {
+        proc.outputBuffer.push(data);
+        if (proc.outputBuffer.length > 200) {
+          proc.outputBuffer = proc.outputBuffer.slice(-200);
+        }
+      }
     });
+
+    // ── Gap 3: Track exit and feed back to scheduler ──
     ptyProcess.onExit(({ exitCode }) => {
       session.status = "exited";
       session.exitCode = exitCode;
       session.endedAt = new Date().toISOString();
       recordSessionHistory(session);
+      activeProcesses.delete(session.id);
+      callCompletion({ exitCode, timedOut: false });
     });
   });
 });

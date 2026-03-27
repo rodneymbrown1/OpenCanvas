@@ -68,10 +68,26 @@
   border-color: #eab308;
 }
 
+.fc .fc-event[data-status="running"] {
+  background-color: #06b6d4;
+  border-color: #06b6d4;
+  animation: pulse-running 2s ease-in-out infinite;
+}
+
+@keyframes pulse-running {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
 .fc .fc-event[data-status="completed"] {
   background-color: #22c55e;
   border-color: #22c55e;
   opacity: 0.7;
+}
+
+.fc .fc-event[data-status="failed"] {
+  background-color: #f97316;
+  border-color: #f97316;
 }
 
 .fc .fc-event[data-status="triggered"] {

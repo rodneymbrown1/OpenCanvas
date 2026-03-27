@@ -16,16 +16,31 @@ export default function CalendarView() {
   const [showForm, setShowForm] = useState(false);
   const [formInitialStart, setFormInitialStart] = useState<string | undefined>();
   const [formInitialEnd, setFormInitialEnd] = useState<string | undefined>();
+  const [editingEvent, setEditingEvent] = useState<CalendarEvent | undefined>();
   const [popoverEvent, setPopoverEvent] = useState<CalendarEvent | null>(null);
   const [popoverPosition, setPopoverPosition] = useState({ x: 0, y: 0 });
 
   const handleCreate = useCallback(
     async (event: Partial<CalendarEvent> & { title: string; startTime: string }) => {
-      await addEvent(event);
+      if (editingEvent) {
+        // Editing existing event — update instead of create
+        await updateEvent(editingEvent.id, event);
+        setEditingEvent(undefined);
+      } else {
+        await addEvent(event);
+      }
       setShowForm(false);
     },
-    [addEvent]
+    [addEvent, updateEvent, editingEvent]
   );
+
+  const handleEdit = useCallback((event: CalendarEvent) => {
+    setEditingEvent(event);
+    setFormInitialStart(undefined);
+    setFormInitialEnd(undefined);
+    setShowForm(true);
+    setPopoverEvent(null);
+  }, []);
 
   const handleDelete = useCallback(
     async (id: string) => {
@@ -64,6 +79,7 @@ export default function CalendarView() {
   );
 
   const handleNewEvent = useCallback(() => {
+    setEditingEvent(undefined);
     setFormInitialStart(undefined);
     setFormInitialEnd(undefined);
     setShowForm(true);
@@ -107,9 +123,10 @@ export default function CalendarView() {
       {showForm && (
         <CalendarEventForm
           onSubmit={handleCreate}
-          onCancel={() => setShowForm(false)}
+          onCancel={() => { setShowForm(false); setEditingEvent(undefined); }}
           initialStart={formInitialStart}
           initialEnd={formInitialEnd}
+          editEvent={editingEvent}
         />
       )}
 
@@ -120,6 +137,7 @@ export default function CalendarView() {
           onClose={() => setPopoverEvent(null)}
           onDelete={handleDelete}
           onComplete={handleComplete}
+          onEdit={handleEdit}
         />
       )}
     </div>

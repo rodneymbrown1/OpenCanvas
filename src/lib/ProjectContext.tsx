@@ -372,6 +372,20 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     setState((prev) => ({ ...prev, appStatus: "initializing", startupLog: [] }));
 
     try {
+      // Clean up any existing instance first (kill-and-restart)
+      await Promise.allSettled([
+        fetch("/api/services?action=stop", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cwd: session.workDir }),
+        }),
+        fetch("/api/stack?action=stop", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cwd: session.workDir }),
+        }),
+      ]);
+
       // Ask the user's selected agent to find and start the app
       const res = await fetch("/api/stack?action=start", {
         method: "POST",

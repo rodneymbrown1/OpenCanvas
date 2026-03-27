@@ -32,6 +32,51 @@ function json(res, data, status = 200) {
   res.end(JSON.stringify(data));
 }
 
+const OPEN_CANVAS_SKILL = `# Open Canvas
+
+Open Canvas is a local browser-based IDE that integrates terminal coding agents
+(Claude, Codex, Gemini) with workspace management, live app preview, and project
+tracking. You are running inside an Open Canvas project.
+
+## What You Can Touch
+
+\`\`\`
+.open-canvas/
+├── skills.md          # Project conventions & patterns (read/write)
+├── PROJECT.md         # Project documentation (read/write)
+└── GLOBAL_DATA.md     # Cross-project shared context (read/write)
+
+skills/
+├── run_app.md         # How to run the app (read)
+├── dynamic_skills.md  # Add new skills here as needed (read/write)
+└── open-canvas.md     # This file (read)
+
+apps/                  # App source code lives here (read/write)
+data/                  # Project data files (read/write)
+run-config.yaml        # Service topology — defines how to start services (read/write)
+open-canvas.yaml       # Project config — agent settings, permissions (read only)
+\`\`\`
+
+## Key APIs (PTY server on localhost:3001)
+
+- \`GET  /api/config\`         — read project config
+- \`GET  /api/skills?scope=project&cwd={path}\` — read skills
+- \`POST /api/skills\`         — append or update skills
+- \`GET  /api/services?cwd={path}\` — list running services
+- \`POST /api/services\`       — start/stop services from run-config.yaml
+- \`PATCH /api/config/api-keys\` — add API keys
+
+## Rules
+
+- Never hardcode ports — use PORT=0 or let the framework pick one.
+- Place app code in \`apps/\`.
+- Document conventions in \`.open-canvas/skills.md\` as you discover them.
+- Create or update \`run-config.yaml\` when adding services.
+- Your process is tagged with \`OC_PROJECT\` and \`OC_SERVICE\` env vars for discovery.
+- Before starting an app, check if it's already running and kill it first.
+- Always print the URL when the app starts so Open Canvas can detect the port.
+`;
+
 const RUN_APP_SKILLS = `# Project Skills
 
 ## How to Run the App
@@ -53,6 +98,19 @@ When creating or modifying apps in this project:
 - Use the framework's built-in port configuration (e.g. PORT env var, --port 0, etc.)
 - Place app source code in the \`apps/\` folder.
 - Create or update \`run.sh\` at the project root so the app can be started easily.
+
+## Process Lifecycle
+
+Before starting the app:
+1. Check if it's already running: \`lsof -iTCP -sTCP:LISTEN -P -n\`
+2. If you find a process for this project, kill it before restarting.
+3. Open Canvas automatically registers your port when it detects it in stdout.
+
+Your process runs with these env vars (set by Open Canvas):
+- \`OC_PROJECT\` — project name (used for port registry tagging)
+- \`OC_SERVICE\` — service name (usually "app")
+
+Always print the URL (e.g., \`http://localhost:PORT\`) when the app starts — this is how Open Canvas detects the port.
 `;
 
 // Ensure skills/ directory and default skill files exist for a project
@@ -60,12 +118,16 @@ function ensureSkills(projectPath) {
   const skillsDir = path.join(projectPath, "skills");
   const runAppPath = path.join(skillsDir, "run_app.md");
   const dynamicSkillsPath = path.join(skillsDir, "dynamic_skills.md");
+  const openCanvasPath = path.join(skillsDir, "open-canvas.md");
   fs.mkdirSync(skillsDir, { recursive: true });
   if (!fs.existsSync(runAppPath)) {
     fs.writeFileSync(runAppPath, RUN_APP_SKILLS);
   }
   if (!fs.existsSync(dynamicSkillsPath)) {
     fs.writeFileSync(dynamicSkillsPath, "dynamically add skills as you see fit\n");
+  }
+  if (!fs.existsSync(openCanvasPath)) {
+    fs.writeFileSync(openCanvasPath, OPEN_CANVAS_SKILL);
   }
 }
 
