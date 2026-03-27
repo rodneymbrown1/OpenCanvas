@@ -15,11 +15,6 @@ import {
   dismissNotification,
 } from "../../src/lib/calendarConfig.js";
 
-import {
-  detectCalendarIntent,
-  routeToCalendar,
-} from "../../src/lib/calendarAgent.js";
-
 import { expandCron } from "../../src/lib/calendarCronExpander.js";
 import { triggerEventNow } from "../cron-scheduler.mjs";
 
@@ -168,43 +163,6 @@ export async function handle(req, res, url) {
     return true;
   }
 
-  // ── POST /api/calendar/agent ───────────────────────────────────────────
-  if (pathname === "/api/calendar/agent" && method === "POST") {
-    const body = await parseBody(req);
-
-    if (body.action === "detect") {
-      if (!body.text) {
-        jsonResponse(res, { error: "text required" }, 400);
-        return true;
-      }
-      const hasIntent = detectCalendarIntent(body.text);
-      jsonResponse(res, { hasIntent });
-      return true;
-    }
-
-    if (body.action === "create-from-intent") {
-      if (!body.text) {
-        jsonResponse(res, { error: "text required" }, 400);
-        return true;
-      }
-      const event = routeToCalendar(
-        body.text,
-        body.sourceAgent || "claude",
-        body.sourceProject,
-        body.sourceSessionId
-      );
-      jsonResponse(res, { event });
-      return true;
-    }
-
-    jsonResponse(
-      res,
-      { error: "action required (detect|create-from-intent)" },
-      400
-    );
-    return true;
-  }
-
   // ── GET /api/calendar/cron ─────────────────────────────────────────────
   if (pathname === "/api/calendar/cron" && method === "GET") {
     ensureCalendarDir();
@@ -225,41 +183,6 @@ export async function handle(req, res, url) {
       activeCount: jobs.filter((j) => j.status === "active").length,
       totalEvents: events.length,
     });
-    return true;
-  }
-
-  // ── POST /api/calendar/google ──────────────────────────────────────────
-  if (pathname === "/api/calendar/google" && method === "POST") {
-    ensureCalendarDir();
-    const body = await parseBody(req);
-
-    if (body.action === "sync") {
-      jsonResponse(
-        res,
-        {
-          error:
-            "Google Calendar MCP server not configured. Add it in Settings > MCP.",
-          hint: "Configure an MCP server named 'google-calendar' to enable sync.",
-        },
-        501
-      );
-      return true;
-    }
-
-    if (body.action === "push") {
-      if (!body.eventId) {
-        jsonResponse(res, { error: "eventId required" }, 400);
-        return true;
-      }
-      jsonResponse(
-        res,
-        { error: "Google Calendar MCP server not configured." },
-        501
-      );
-      return true;
-    }
-
-    jsonResponse(res, { error: "action required (sync|push)" }, 400);
     return true;
   }
 

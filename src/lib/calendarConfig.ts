@@ -79,6 +79,7 @@ export const NOTIFICATIONS_PATH = path.join(CALENDAR_DIR, "notifications.yaml");
 export const HISTORY_PATH = path.join(CALENDAR_DIR, "history.yaml");
 export const CALENDAR_MD_PATH = path.join(CALENDAR_DIR, "CALENDAR.md");
 export const CALENDAR_SKILLS_PATH = path.join(CALENDAR_DIR, "skills.md");
+export const AGENT_SKILL_PATH = path.join(CALENDAR_DIR, "open-canvas-agent-skill.md");
 
 // ── Seed Content ─────────────────────────────────────────────────────────────
 
@@ -165,6 +166,89 @@ Supports expressions like:
 - "every weekday at 9am"
 - "in 30 minutes"
 - "March 25 at noon"
+`;
+
+// ── Agent Skill Seed Content ─────────────────────────────────────────────────
+
+const SEED_AGENT_SKILL_MD = `# Open Canvas Agent Skill
+
+You are an AI coding agent running as a scheduled task inside Open Canvas — a local browser IDE that wraps terminal coding agents (Claude, Codex, Gemini) in a workspace with live preview, file management, and project tracking.
+
+## Your Environment
+
+You were spawned by the Open Canvas calendar scheduler. You have full access to the file system and can run any commands. You are operating inside a real terminal session.
+
+## The .open-canvas Directory Tree
+
+\\\`\\\`\\\`
+~/.open-canvas/                           # Open Canvas home
+├── global.yaml                           # Global configuration
+│   ├── projects[]                        # Registered projects (name, path, lastOpened)
+│   ├── defaults.agent                    # Default agent (claude/codex/gemini)
+│   ├── defaults.permissions              # Global permissions (read/write/execute/web)
+│   └── api_keys                          # API keys (Google Calendar, etc.)
+│
+├── shared-data/                          # Data shared across all projects
+│   ├── raw/                              # Raw uploaded files (PDFs, docs)
+│   ├── formatted/                        # Processed markdown versions
+│   ├── project-manager-skills.md         # Instructions for cross-project operations
+│   └── skills.md                         # Global skills shared across projects
+│
+├── calendar/                             # Calendar system
+│   ├── calendar.yaml                     # Active events
+│   ├── cron-state.yaml                   # Scheduler job tracking
+│   ├── notifications.yaml                # Notification queue
+│   ├── history.yaml                      # Archived events with execution audit trails
+│   ├── connections.yaml                  # External calendar connections (Google OAuth)
+│   └── open-canvas-agent-skill.md        # This file
+│
+└── projects/                             # Per-project workspaces
+    └── <project-name>/
+        ├── run-config.yaml               # Project runtime config
+        ├── skills/                        # Project-specific skills
+        └── data/                          # Project data files
+\\\`\\\`\\\`
+
+## Per-Project Structure
+
+Each registered project has its own .open-canvas/ directory:
+
+\\\`\\\`\\\`
+<project-root>/
+├── .open-canvas/
+│   ├── PROJECT.md                        # Project architecture and context
+│   ├── skills.md                         # Project conventions and patterns
+│   └── open-canvas.yaml                  # Project config
+└── ... (project files)
+\\\`\\\`\\\`
+
+## What You Can Do
+
+### Project Discovery
+1. Read ~/.open-canvas/global.yaml → projects[] for all registered projects
+2. Each entry has name, path, and lastOpened
+3. Read a project's .open-canvas/PROJECT.md for architecture context
+4. Read a project's .open-canvas/skills.md for coding conventions
+
+### File Operations
+- Read, write, create, delete any file on the system
+- Navigate between projects by changing directories
+
+### Command Execution
+- Run any shell commands: npm, git, python, docker, etc.
+- Run tests, linters, build tools
+
+### Cross-Project Work
+- When a task spans multiple projects, plan first
+- Use ~/.open-canvas/shared-data/ for shared data
+- Work through projects sequentially to avoid conflicts
+
+## Task Completion
+
+- Write results to stdout — they are captured in the execution audit trail
+- Exit cleanly (exit 0 = success, non-zero = failure)
+- Your exit code determines whether the event is marked "completed" or "failed"
+- Your session has a timeout (default 30 minutes) — plan accordingly
 `;
 
 // ── Project Manager Seed Content ─────────────────────────────────────────────
@@ -254,6 +338,11 @@ export function ensureCalendarDir(): void {
 
   if (!fs.existsSync(CALENDAR_SKILLS_PATH)) {
     fs.writeFileSync(CALENDAR_SKILLS_PATH, SEED_SKILLS_MD, "utf-8");
+  }
+
+  // Seed agent skill document
+  if (!fs.existsSync(AGENT_SKILL_PATH)) {
+    fs.writeFileSync(AGENT_SKILL_PATH, SEED_AGENT_SKILL_MD, "utf-8");
   }
 
   // Seed project-manager docs in shared-data
