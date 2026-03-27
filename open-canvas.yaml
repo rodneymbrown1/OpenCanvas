@@ -1,5 +1,5 @@
 workspace:
-  root: /Users/rodneymbrown/.open-canvas/projects/networking-scheduler
+  root: /Users/rodneymbrown/.open-canvas/projects/stompbox-recon
 agent:
   active: claude
   claude:
@@ -37,7 +37,7 @@ preferences:
   default_stack: nextjs-tailwind
   theme: light
 session:
-  lastSessionId: 25ff3b48
+  lastSessionId: 6bc5d054
   lastAgent: claude
-  lastWorkDir: /Users/rodneymbrown/.open-canvas/projects/networking-scheduler
-  connectedAt: 2026-03-27T22:04:50.917Z
+  lastWorkDir: /Users/rodneymbrown/.open-canvas/projects/stompbox-recon
+  connectedAt: 2026-03-27T22:55:52.161Z

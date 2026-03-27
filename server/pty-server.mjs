@@ -758,7 +758,14 @@ Important:
     req.on("end", () => {
       try {
         const { prompt, agent, cwd, skillContent } = JSON.parse(body);
+        console.log(`[pty-server] voice-job: received POST /voice-job`);
+        console.log(`[pty-server] voice-job:   prompt="${prompt?.substring(0, 150)}${(prompt?.length || 0) > 150 ? "..." : ""}"`);
+        console.log(`[pty-server] voice-job:   agent=${agent || "claude (default)"}`);
+        console.log(`[pty-server] voice-job:   cwd=${cwd}`);
+        console.log(`[pty-server] voice-job:   skillContent=${skillContent ? `${skillContent.length} bytes` : "NONE"}`);
+
         if (!prompt || !cwd) {
+          console.error(`[pty-server] voice-job: REJECTED — missing prompt or cwd`);
           res.writeHead(400);
           res.end(JSON.stringify({ error: "prompt and cwd required" }));
           return;
@@ -766,19 +773,21 @@ Important:
 
         const agentName = agent || "claude";
         const agentDef = getAgentArgs(agentName);
+        console.log(`[pty-server] voice-job:   agentDef shell=${agentDef.shell} args=${JSON.stringify(agentDef.args)}`);
 
         // Build the full prompt: prepend skill context if provided
         const fullPrompt = skillContent
           ? `<context>\n${skillContent}\n</context>\n\n${prompt}`
           : prompt;
 
+        console.log(`[pty-server] voice-job:   fullPrompt length=${fullPrompt.length} bytes (skill context ${skillContent ? "injected" : "skipped"})`);
+
         const session = createSession(agentName, cwd);
         session.role = "voice";
         session.prompt = prompt;
-        session.tabId = JSON.parse(body).tabId || undefined;
 
-        console.log(`[pty-server] voice-job: spawning ${agentName} session=${session.id} cwd=${cwd}${session.tabId ? ` tab=${session.tabId}` : ""}`);
-        console.log(`[pty-server] voice-job: prompt="${prompt.substring(0, 120)}${prompt.length > 120 ? "..." : ""}"`);
+        console.log(`[pty-server] voice-job: spawning ${agentName} session=${session.id} cwd=${cwd}`);
+        console.log(`[pty-server] voice-job:   env: OC_INPUT_MODE=voice`);
 
         const ptyProcess = pty.spawn(agentDef.shell, agentDef.args, {
           name: "xterm-256color",
@@ -790,12 +799,12 @@ Important:
             TERM: "xterm-256color",
             COLORTERM: "truecolor",
             OC_INPUT_MODE: "voice",
-            OC_VOICE_TAB: session.tabId || "",
           },
         });
 
         session.pid = ptyProcess.pid;
         session.status = "running";
+        console.log(`[pty-server] voice-job: PTY spawned pid=${ptyProcess.pid} session=${session.id}`);
 
         // Track process for reconnection
         activeProcesses.set(session.id, {
@@ -805,9 +814,11 @@ Important:
         });
 
         // Send the skill-enhanced prompt after agent initializes
+        console.log(`[pty-server] voice-job: waiting 3s for agent CLI to initialize...`);
         setTimeout(() => {
+          console.log(`[pty-server] voice-job: injecting prompt into session=${session.id} (${fullPrompt.length} bytes)`);
           ptyProcess.write(fullPrompt + "\r");
-          console.log(`[pty-server] voice-job: sent prompt to session=${session.id}`);
+          console.log(`[pty-server] voice-job: prompt sent to session=${session.id} ✓`);
         }, 3000);
 
         ptyProcess.onData((data) => {

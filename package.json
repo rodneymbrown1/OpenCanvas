@@ -11,9 +11,6 @@
     "open-canvas": "concurrently \"npm run dev\" \"npm run pty-server\"",
     "start": "npm run build && tsx server/pty-server.mjs"
   },
-  "bin": {
-    "oc": "./cli/bin/oc.mjs"
-  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/rodneymbrown1/OpenCanvas.git"

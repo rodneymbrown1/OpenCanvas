@@ -1,59 +1,48 @@
 /**
- * Voice Routing API
+ * Voice Context API
  *
- * GET /api/voice-routing?view=<tabId>&cwd=<projectRoot>
- *   → Returns { cwd, skillContent, tabId } for context-aware voice recording.
+ * GET /api/voice-context
+ *   → Returns { cwd, skillContent } with the full composed skill context.
  *
- * Resolves the working directory and skill instructions based on the
- * active tab when the user triggers a voice recording.
+ * The agent always spawns in ~/.open-canvas/recording/ with ALL skills
+ * composed into a single context string. No tab-based routing — the agent
+ * determines intent natively from the user's message.
  */
 
-import path from "node:path";
-import { ensureRecordingSkills, readRecordingSkill } from "../recording-skills.mjs";
-
-const HOME = process.env.HOME || process.env.USERPROFILE || "/tmp";
-const OC_HOME = path.join(HOME, ".open-canvas");
-
-/**
- * Resolve the working directory for a given tab.
- * Some tabs have fixed directories, others use the project root.
- */
-function resolveCwd(tabId, projectRoot) {
-  switch (tabId) {
-    case "calendar":
-      return path.join(OC_HOME, "calendar");
-    case "data":
-      return path.join(OC_HOME, "shared-data");
-    case "settings":
-      return OC_HOME;
-    default:
-      // workspace, ports, projects, jobs, usage, appify
-      return projectRoot || process.cwd();
-  }
-}
+import { composeVoiceContext, RECORDING_DIR } from "../recording-skills.mjs";
 
 export function handle(req, res, url) {
   const pathname = url.pathname;
-  const method = req.method;
 
-  if (pathname !== "/api/voice-routing") return false;
-
-  if (method === "GET") {
-    const view = url.searchParams.get("view") || "workspace";
-    const projectRoot = url.searchParams.get("cwd") || "";
-
-    // Lazy bootstrap — creates ~/.open-canvas/recording/ and default .md files
-    ensureRecordingSkills();
-
-    const cwd = resolveCwd(view, projectRoot);
-    const skillContent = readRecordingSkill(view);
+  // New unified endpoint
+  if (pathname === "/api/voice-context" && req.method === "GET") {
+    console.log(`[voice-routing] GET /api/voice-context — composing all skills, cwd=${RECORDING_DIR}`);
+    const skillContent = composeVoiceContext();
+    console.log(`[voice-routing] GET /api/voice-context — returning ${skillContent.length} bytes of skill content`);
 
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(
       JSON.stringify({
-        tabId: view,
-        cwd,
+        cwd: RECORDING_DIR,
         skillContent,
+      })
+    );
+    return true;
+  }
+
+  // Legacy endpoint — redirect to new behavior (same response, ignore tab)
+  if (pathname === "/api/voice-routing" && req.method === "GET") {
+    const view = url.searchParams.get("view") || "(none)";
+    console.log(`[voice-routing] GET /api/voice-routing (LEGACY) — view=${view} — redirecting to new unified behavior`);
+    const skillContent = composeVoiceContext();
+    console.log(`[voice-routing] GET /api/voice-routing (LEGACY) — returning ${skillContent.length} bytes, cwd=${RECORDING_DIR}`);
+
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        cwd: RECORDING_DIR,
+        skillContent,
+        tabId: "voice", // Legacy compat field
       })
     );
     return true;

@@ -6,11 +6,9 @@ import SpeechToElementImport from "speech-to-element";
 const SpeechToElement =
   (SpeechToElementImport as any).default || SpeechToElementImport;
 import { useJobs } from "@/lib/JobsContext";
-import { useView } from "@/lib/ViewContext";
 
 export function SpeechToTextButton() {
   const { spawnVoiceJob, spawning, activeJobs } = useJobs();
-  const { view } = useView();
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [showPreview, setShowPreview] = useState(false);
@@ -34,13 +32,6 @@ export function SpeechToTextButton() {
     return () => document.removeEventListener("mousedown", handler);
   }, [showPreview, isRecording]);
 
-  // Reset target session when switching away from jobs
-  useEffect(() => {
-    if (view !== "jobs") {
-      setTargetSessionId(null);
-    }
-  }, [view]);
-
   const handleToggle = useCallback(() => {
     if (isRecording) {
       // Stop recording and submit
@@ -50,7 +41,7 @@ export function SpeechToTextButton() {
       const text = textRef.current?.textContent?.trim() || "";
       if (text) {
         setTranscript(text);
-        spawnVoiceJob(text, view, targetSessionId || undefined);
+        spawnVoiceJob(text, targetSessionId || undefined);
         setTimeout(() => {
           if (textRef.current) textRef.current.textContent = "";
           setTranscript("");
@@ -61,9 +52,10 @@ export function SpeechToTextButton() {
         setShowPreview(false);
       }
     } else {
-      // Start recording immediately
+      // Start recording — reset target session
       setShowPreview(true);
       setTranscript("");
+      setTargetSessionId(null);
       if (textRef.current) textRef.current.textContent = "";
 
       setTimeout(() => {
@@ -90,19 +82,7 @@ export function SpeechToTextButton() {
         });
       }, 100);
     }
-  }, [isRecording, spawnVoiceJob, view, targetSessionId]);
-
-  // Tab label for context display
-  const tabLabel =
-    view === "workspace" ? "Workspace" :
-    view === "calendar" ? "Calendar" :
-    view === "ports" ? "Ports" :
-    view === "data" ? "Data" :
-    view === "projects" ? "Projects" :
-    view === "jobs" ? "Jobs" :
-    view === "settings" ? "Settings" :
-    view === "usage" ? "Usage" :
-    view;
+  }, [isRecording, spawnVoiceJob, targetSessionId]);
 
   return (
     <div className="relative" ref={previewRef}>
@@ -135,12 +115,12 @@ export function SpeechToTextButton() {
       {/* Recording popup */}
       {showPreview && (
         <div className="absolute bottom-full left-0 mb-2 w-80 bg-[var(--bg-secondary)] border border-[var(--border)] rounded-lg shadow-lg z-50 overflow-hidden">
-          {/* Context badge */}
+          {/* Header */}
           <div className="px-3 py-2 border-b border-[var(--border)] flex items-center justify-between">
             <span className="text-[10px] font-medium text-[var(--text-muted)] uppercase tracking-wider">
-              {tabLabel}
+              Voice Command
             </span>
-            {view === "jobs" && activeJobs.length > 0 && (
+            {activeJobs.length > 0 && (
               <select
                 value={targetSessionId || ""}
                 onChange={(e) => setTargetSessionId(e.target.value || null)}

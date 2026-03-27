@@ -6,8 +6,6 @@ import {
   useCallback,
   type ReactNode,
 } from "react";
-import type { ViewId } from "@/lib/ViewContext";
-
 export interface Job {
   id: string;
   agent: string;
@@ -20,15 +18,14 @@ export interface Job {
   inputBytes: number;
   pid: number | null;
   prompt?: string; // The speech-to-text prompt that triggered this job
-  tabId?: string;  // The tab context that triggered this voice job
 }
 
 interface JobsContextType {
   jobs: Job[];
   activeJobs: Job[];
   activeCount: number;
-  /** Add a speech-triggered job (spawns a background CLW session, context-aware) */
-  spawnVoiceJob: (prompt: string, view?: ViewId, targetSessionId?: string) => Promise<void>;
+  /** Add a speech-triggered job (spawns a background agent session) */
+  spawnVoiceJob: (prompt: string, targetSessionId?: string) => Promise<void>;
   /** Whether a voice job is currently being spawned */
   spawning: boolean;
 }
@@ -67,7 +64,7 @@ export function JobsProvider({ children }: { children: ReactNode }) {
   const activeJobs = jobs.filter((j) => j.status === "running");
 
   const spawnVoiceJob = useCallback(
-    async (prompt: string, view?: ViewId, targetSessionId?: string) => {
+    async (prompt: string, targetSessionId?: string) => {
       setSpawning(true);
       try {
         // Ensure PTY server is running
@@ -83,42 +80,28 @@ export function JobsProvider({ children }: { children: ReactNode }) {
           }
         }
 
-        // Get workspace root from config
-        let projectRoot = "";
-        try {
-          const configRes = await fetch("/api/config");
-          const configData = await configRes.json();
-          projectRoot = configData.workspace?.root || configData.session?.lastWorkDir || "";
-        } catch {}
+        // Fetch voice context — all skills composed, cwd = recording/
+        let cwd = "";
+        let skillContent = "";
 
-        if (!projectRoot) {
-          console.warn("[VoiceJob] No workspace directory found");
+        try {
+          const contextRes = await fetch("/api/voice-context");
+          if (contextRes.ok) {
+            const contextData = await contextRes.json();
+            cwd = contextData.cwd || "";
+            skillContent = contextData.skillContent || "";
+          }
+        } catch {
+          console.warn("[VoiceJob] Voice context fetch failed, using defaults");
+        }
+
+        if (!cwd) {
+          console.warn("[VoiceJob] No working directory from voice context");
           setSpawning(false);
           return;
         }
 
-        // Fetch voice routing — resolves cwd and skill content based on active tab
-        let cwd = projectRoot;
-        let skillContent = "";
-        let tabId = view || "workspace";
-
-        if (view) {
-          try {
-            const routeRes = await fetch(
-              `/api/voice-routing?view=${encodeURIComponent(view)}&cwd=${encodeURIComponent(projectRoot)}`
-            );
-            if (routeRes.ok) {
-              const routeData = await routeRes.json();
-              cwd = routeData.cwd || projectRoot;
-              skillContent = routeData.skillContent || "";
-              tabId = routeData.tabId || view;
-            }
-          } catch {
-            console.warn("[VoiceJob] Voice routing failed, using defaults");
-          }
-        }
-
-        // If targeting an existing session (Jobs tab), inject into that session
+        // If targeting an existing session, inject into that session
         if (targetSessionId) {
           const inputPrompt = skillContent
             ? `<context>\n${skillContent}\n</context>\n\n${prompt}`
@@ -148,7 +131,6 @@ export function JobsProvider({ children }: { children: ReactNode }) {
             agent: "claude",
             cwd,
             skillContent,
-            tabId,
           }),
         });
 
