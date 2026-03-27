@@ -2,7 +2,7 @@
   <img src="assets/open_canvas_logo.png" alt="Open Canvas" width="400" />
 </p>
 
-<p align="center"><strong>Build apps from your data using the coding agents you already have.</strong></p>
+<p align="center"><strong>Build apps from your data using the coding agents you already have. </strong></p>
 
 <p align="center">
   Cost to run: <strong>$0</strong>. Uses your personal Claude Code, Codex, or Gemini CLI account. Runs locally.
