@@ -1,5 +1,5 @@
 workspace:
-  root: /Users/rodneymbrown/.open-canvas/projects/open-canvas-calendar
+  root: /Users/rodneymbrown/.open-canvas/projects/networking-scheduler
 agent:
   active: claude
   claude:
@@ -37,7 +37,7 @@ preferences:
   default_stack: nextjs-tailwind
   theme: light
 session:
-  lastSessionId: 533cc227
+  lastSessionId: 25ff3b48
   lastAgent: claude
-  lastWorkDir: /Users/rodneymbrown/.open-canvas/projects/open-canvas-calendar
-  connectedAt: 2026-03-27T21:50:38.026Z
+  lastWorkDir: /Users/rodneymbrown/.open-canvas/projects/networking-scheduler
+  connectedAt: 2026-03-27T22:04:50.917Z
