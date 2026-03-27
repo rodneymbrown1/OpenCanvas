@@ -1,5 +1,5 @@
 workspace:
-  root: /Users/rodneymbrown/.open-canvas/projects/stompbox-recon
+  root: 
 agent:
   active: claude
   claude:
@@ -34,10 +34,10 @@ server:
   auth_token: ""
 preferences:
   persist_jobs: true
-  default_stack: nextjs-tailwind
+  default_stack: 
   theme: light
 session:
   lastSessionId: 6bc5d054
   lastAgent: claude
-  lastWorkDir: /Users/rodneymbrown/.open-canvas/projects/stompbox-recon
+  lastWorkDir: 
   connectedAt: 2026-03-27T22:55:52.161Z
