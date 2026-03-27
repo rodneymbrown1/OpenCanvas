@@ -1,5 +1,5 @@
 workspace:
-  root: /Users/rodneymbrown/.open-canvas/projects/devpro-finance-ops
+  root: /Users/rodneymbrown/.open-canvas/projects/test22
 agent:
   active: gemini
   claude:
@@ -40,4 +40,4 @@ session:
   lastSessionId: c9964227
   lastAgent: gemini
   lastWorkDir: /Users/rodneymbrown/.open-canvas/projects/devpro-finance-ops
-  connectedAt: 2026-03-27T08:21:35.747Z
+  connectedAt: 2026-03-27T08:44:50.206Z

@@ -55,13 +55,17 @@ When creating or modifying apps in this project:
 - Create or update \`run.sh\` at the project root so the app can be started easily.
 `;
 
-// Ensure skills/ directory and run_app.md exist for a project
+// Ensure skills/ directory and default skill files exist for a project
 function ensureSkills(projectPath) {
   const skillsDir = path.join(projectPath, "skills");
   const runAppPath = path.join(skillsDir, "run_app.md");
+  const dynamicSkillsPath = path.join(skillsDir, "dynamic_skills.md");
+  fs.mkdirSync(skillsDir, { recursive: true });
   if (!fs.existsSync(runAppPath)) {
-    fs.mkdirSync(skillsDir, { recursive: true });
     fs.writeFileSync(runAppPath, RUN_APP_SKILLS);
+  }
+  if (!fs.existsSync(dynamicSkillsPath)) {
+    fs.writeFileSync(dynamicSkillsPath, "dynamically add skills as you see fit\n");
   }
 }
 
