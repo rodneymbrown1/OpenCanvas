@@ -85,6 +85,35 @@ const AGENT_COMMANDS = {
   calendar: { shell: "/bin/zsh", args: ["-l", "-c", "claude"] }, // calendar agent uses claude
 };
 
+// CLI flags that skip permission prompts per agent
+const DANGEROUS_EDIT_FLAGS = {
+  claude: "--dangerously-skip-permissions",
+  codex: "--full-auto",
+  gemini: "--auto-approve",
+};
+
+/**
+ * Build spawn args for an agent, injecting the dangerous-edits flag
+ * if enabled in the project config.
+ */
+function getAgentArgs(agentName) {
+  const agentDef = AGENT_COMMANDS[agentName] || AGENT_COMMANDS.shell;
+  const cfg = loadConfig();
+  const agentCfg = cfg.agent?.[agentName];
+  const dangerouslyAllowEdits = agentCfg?.dangerouslyAllowEdits === true;
+
+  if (!dangerouslyAllowEdits || !DANGEROUS_EDIT_FLAGS[agentName]) {
+    return { ...agentDef };
+  }
+
+  // The args pattern is ["-l", "-c", "agentCmd"] — append the flag to the command string
+  const flag = DANGEROUS_EDIT_FLAGS[agentName];
+  const args = agentDef.args.map((a) =>
+    a === agentName ? `${agentName} ${flag}` : a
+  );
+  return { shell: agentDef.shell, args };
+}
+
 // ── Session Store ──────────────────────────────────────────────────────────
 
 const sessions = new Map();
@@ -274,7 +303,7 @@ Important:
         }
 
         const agentName = agent;
-        const agentDef = AGENT_COMMANDS[agentName] || AGENT_COMMANDS.claude;
+        const agentDef = getAgentArgs(agentName);
 
         const session = createSession(agentName, cwd);
         session.role = "app-start";
@@ -693,7 +722,7 @@ Important:
         }
 
         const agentName = agent || "claude";
-        const agentDef = AGENT_COMMANDS[agentName] || AGENT_COMMANDS.claude;
+        const agentDef = getAgentArgs(agentName);
 
         // Build the full prompt: prepend skill context if provided
         const fullPrompt = skillContent
@@ -881,7 +910,7 @@ wss.on("connection", (ws) => {
     switch (msg.type) {
       case "spawn": {
         const agentName = msg.agent || "shell";
-        const agentDef = AGENT_COMMANDS[agentName] || AGENT_COMMANDS.shell;
+        const agentDef = getAgentArgs(agentName);
         const cwd = msg.cwd || process.env.HOME;
         const cols = msg.cols || 120;
         const rows = msg.rows || 30;
@@ -889,9 +918,9 @@ wss.on("connection", (ws) => {
         // Build args — inject --resume for Claude when restoring from history
         let spawnArgs = [...agentDef.args];
         if (msg.resume && agentName === "claude") {
-          // Replace "claude" with "claude --resume" in the shell -c argument
+          // Replace "claude ..." with "claude --resume ..." in the shell -c argument
           spawnArgs = spawnArgs.map((a) =>
-            a === "claude" ? "claude --resume" : a
+            a.startsWith("claude") ? a.replace("claude", "claude --resume") : a
           );
         }
 
@@ -1107,7 +1136,7 @@ httpServer.listen(PORT, () => {
     console.log(`[pty-server] cron spawning session: agent=${opts.agent}, cwd=${opts.cwd}`);
     const session = createSession(opts.agent, opts.cwd);
     session.role = "cron";
-    const agentCmd = AGENT_COMMANDS[opts.agent] || AGENT_COMMANDS.claude;
+    const agentCmd = getAgentArgs(opts.agent);
     const ptyProcess = pty.spawn(agentCmd.shell, agentCmd.args, {
       name: "xterm-256color",
       cols: 120,

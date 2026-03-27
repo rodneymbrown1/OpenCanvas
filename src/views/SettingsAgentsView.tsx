@@ -1,6 +1,6 @@
 
 import { useState, useEffect } from "react";
-import { Save, ArrowLeft } from "lucide-react";
+import { Save, AlertTriangle } from "lucide-react";
 
 type AgentType = "claude" | "codex" | "gemini";
 
@@ -14,16 +14,29 @@ interface AgentPermissions {
 interface AgentSettings {
   mode: "cli" | "api";
   permissions: AgentPermissions;
+  dangerouslyAllowEdits?: boolean;
+}
+
+interface AgentInstallStatus {
+  id: string;
+  label: string;
+  installed: boolean;
+  path: string | null;
 }
 
 export function AgentSettingsPage() {
   const [active, setActive] = useState<AgentType>("claude");
   const [settings, setSettings] = useState<Record<AgentType, AgentSettings>>({
-    claude: { mode: "cli", permissions: { read: true, write: true, execute: true, web: true } },
-    codex: { mode: "cli", permissions: { read: true, write: true, execute: true, web: true } },
-    gemini: { mode: "cli", permissions: { read: true, write: true, execute: true, web: true } },
+    claude: { mode: "cli", permissions: { read: true, write: true, execute: true, web: true }, dangerouslyAllowEdits: false },
+    codex: { mode: "cli", permissions: { read: true, write: true, execute: true, web: true }, dangerouslyAllowEdits: false },
+    gemini: { mode: "cli", permissions: { read: true, write: true, execute: true, web: true }, dangerouslyAllowEdits: false },
   });
   const [saved, setSaved] = useState(false);
+  const [installedAgents, setInstalledAgents] = useState<Record<AgentType, AgentInstallStatus | null>>({
+    claude: null,
+    codex: null,
+    gemini: null,
+  });
 
   useEffect(() => {
     fetch("/api/config")
@@ -32,9 +45,27 @@ export function AgentSettingsPage() {
         if (config.agent) {
           setActive(config.agent.active || "claude");
           setSettings({
-            claude: config.agent.claude || settings.claude,
-            codex: config.agent.codex || settings.codex,
-            gemini: config.agent.gemini || settings.gemini,
+            claude: { ...settings.claude, ...config.agent.claude },
+            codex: { ...settings.codex, ...config.agent.codex },
+            gemini: { ...settings.gemini, ...config.agent.gemini },
+          });
+        }
+      })
+      .catch(() => {});
+
+    // Check which agents are installed
+    fetch("/api/agents")
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.agents) {
+          const map: Record<string, AgentInstallStatus> = {};
+          for (const a of data.agents) {
+            map[a.id] = a;
+          }
+          setInstalledAgents({
+            claude: map.claude || null,
+            codex: map.codex || null,
+            gemini: map.gemini || null,
           });
         }
       })
@@ -150,6 +181,79 @@ export function AgentSettingsPage() {
             </button>
           </div>
         ))}
+      </div>
+
+      {/* Dangerously Allow Edits */}
+      <div className="space-y-3">
+        <label className="text-xs text-[var(--text-muted)] flex items-center gap-1.5">
+          <AlertTriangle size={12} className="text-amber-500" />
+          Dangerous Settings
+        </label>
+        {(() => {
+          const agentStatus = installedAgents[active];
+          const isInstalled = agentStatus?.installed ?? false;
+          const flagLabel: Record<AgentType, string> = {
+            claude: "--dangerously-skip-permissions",
+            codex: "--full-auto",
+            gemini: "--auto-approve",
+          };
+          return (
+            <div
+              className={`bg-[var(--bg-secondary)] border rounded-lg px-4 py-3 ${
+                current.dangerouslyAllowEdits
+                  ? "border-amber-500/50"
+                  : "border-[var(--border)]"
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-amber-500">
+                    Dangerously Allow All Edits
+                  </p>
+                  <p className="text-[10px] text-[var(--text-muted)] mt-0.5">
+                    Launches {active.charAt(0).toUpperCase() + active.slice(1)} with{" "}
+                    <code className="bg-[var(--bg-tertiary)] px-1 rounded text-[9px]">
+                      {flagLabel[active]}
+                    </code>{" "}
+                    — skips all permission prompts.
+                  </p>
+                  {!isInstalled && agentStatus !== null && (
+                    <p className="text-[10px] text-red-400 mt-1">
+                      {active.charAt(0).toUpperCase() + active.slice(1)} is not installed.
+                      Install it first to use this setting.
+                    </p>
+                  )}
+                </div>
+                <button
+                  onClick={() => {
+                    if (!isInstalled && agentStatus !== null) return;
+                    setSettings({
+                      ...settings,
+                      [active]: {
+                        ...current,
+                        dangerouslyAllowEdits: !current.dangerouslyAllowEdits,
+                      },
+                    });
+                  }}
+                  disabled={!isInstalled && agentStatus !== null}
+                  className={`w-10 h-5 rounded-full transition-colors relative shrink-0 ml-3 ${
+                    !isInstalled && agentStatus !== null
+                      ? "bg-[var(--border)] opacity-50 cursor-not-allowed"
+                      : current.dangerouslyAllowEdits
+                        ? "bg-amber-500"
+                        : "bg-[var(--border)]"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                      current.dangerouslyAllowEdits ? "left-5" : "left-0.5"
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       {/* Save */}

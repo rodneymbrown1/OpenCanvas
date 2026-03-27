@@ -1,5 +1,5 @@
 workspace:
-  root: /Users/rodneymbrown/.open-canvas/projects/open-canvas-calendar
+  root: /Users/rodneymbrown/.open-canvas/projects/devpro-finance-ops
 agent:
   active: gemini
   claude:
@@ -9,6 +9,7 @@ agent:
       write: true
       execute: true
       web: true
+    dangerouslyAllowEdits: false
   codex:
     mode: cli
     permissions:
@@ -16,6 +17,7 @@ agent:
       write: true
       execute: true
       web: true
+    dangerouslyAllowEdits: false
   gemini:
     mode: cli
     permissions:
@@ -23,6 +25,7 @@ agent:
       write: true
       execute: true
       web: true
+    dangerouslyAllowEdits: false
 api_keys: null
 mcp_servers: []
 server:
@@ -34,7 +37,7 @@ preferences:
   default_stack: nextjs-tailwind
   theme: dark
 session:
-  lastSessionId: d7fb248f
+  lastSessionId: c9964227
   lastAgent: gemini
-  lastWorkDir: /Users/rodneymbrown/.open-canvas/projects/open-canvas-calendar
-  connectedAt: 2026-03-27T06:18:23.635Z
+  lastWorkDir: /Users/rodneymbrown/.open-canvas/projects/devpro-finance-ops
+  connectedAt: 2026-03-27T08:21:35.747Z

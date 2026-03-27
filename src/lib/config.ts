@@ -12,6 +12,7 @@ export interface AgentPermissions {
 export interface AgentConfig {
   mode: "cli" | "api";
   permissions: AgentPermissions;
+  dangerouslyAllowEdits?: boolean;
 }
 
 export interface McpServer {
