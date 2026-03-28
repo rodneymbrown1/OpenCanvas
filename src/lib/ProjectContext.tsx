@@ -373,6 +373,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
 
     try {
       // Clean up any existing instance first (kill-and-restart)
+      logger.project("Killing existing instances before start");
       await Promise.allSettled([
         fetch("/api/services?action=stop", {
           method: "POST",
@@ -395,7 +396,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       const data = await res.json();
 
       if (data.error) {
-        console.error("[startApp]", data.error);
+        logger.error("project", "startApp failed", data.error);
         setState((prev) => ({
           ...prev,
           appStatus: "error",
@@ -416,7 +417,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         }));
       }
     } catch (err) {
-      console.error("[startApp] fetch failed:", err);
+      logger.error("project", "startApp fetch failed", err);
       setState((prev) => ({
         ...prev,
         appStatus: "error",

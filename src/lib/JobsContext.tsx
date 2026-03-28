@@ -6,6 +6,7 @@ import {
   useCallback,
   type ReactNode,
 } from "react";
+import { logger } from "@/lib/logger";
 export interface Job {
   id: string;
   agent: string;
@@ -46,9 +47,17 @@ export function JobsProvider({ children }: { children: ReactNode }) {
         const data = await res.json();
         const sessions: Job[] = (data.sessions || []).map((s: Job) => ({
           ...s,
-          prompt: jobPrompts.get(s.id) || undefined,
+          prompt: jobPrompts.get(s.id) || s.prompt || undefined,
         }));
         setJobs(sessions);
+
+        // Prune jobPrompts for completed/failed sessions (server has the prompt)
+        const activeIds = new Set(
+          sessions.filter((s) => s.status === "running").map((s) => s.id)
+        );
+        for (const id of jobPrompts.keys()) {
+          if (!activeIds.has(id)) jobPrompts.delete(id);
+        }
       }
     } catch {
       // PTY server may not be running
@@ -65,6 +74,7 @@ export function JobsProvider({ children }: { children: ReactNode }) {
 
   const spawnVoiceJob = useCallback(
     async (prompt: string, targetSessionId?: string) => {
+      logger.context("VoiceJob: spawning", { prompt: prompt.substring(0, 100), targetSessionId });
       setSpawning(true);
       try {
         // Ensure PTY server is running
@@ -72,11 +82,17 @@ export function JobsProvider({ children }: { children: ReactNode }) {
         const statusData = await statusRes.json();
         if (!statusData.running) {
           await fetch("/api/pty-status", { method: "POST" });
+          let started = false;
           for (let i = 0; i < 5; i++) {
             await new Promise((r) => setTimeout(r, 1000));
             const check = await fetch("/api/pty-status");
             const checkData = await check.json();
-            if (checkData.running) break;
+            if (checkData.running) { started = true; break; }
+          }
+          if (!started) {
+            logger.error("context", "VoiceJob: PTY server failed to start after 5 retries");
+            setSpawning(false);
+            return;
           }
         }
 
@@ -92,11 +108,11 @@ export function JobsProvider({ children }: { children: ReactNode }) {
             skillContent = contextData.skillContent || "";
           }
         } catch {
-          console.warn("[VoiceJob] Voice context fetch failed, using defaults");
+          logger.warn("context", "VoiceJob: voice context fetch failed, using defaults");
         }
 
         if (!cwd) {
-          console.warn("[VoiceJob] No working directory from voice context");
+          logger.warn("context", "VoiceJob: no working directory from voice context");
           setSpawning(false);
           return;
         }
@@ -114,7 +130,7 @@ export function JobsProvider({ children }: { children: ReactNode }) {
           });
 
           if (!inputRes.ok) {
-            console.error("[VoiceJob] Failed to send input to session", targetSessionId);
+            logger.error("context", `VoiceJob: failed to send input to session ${targetSessionId}`);
           }
 
           setSpawning(false);
@@ -138,15 +154,16 @@ export function JobsProvider({ children }: { children: ReactNode }) {
           const spawnData = await spawnRes.json();
           if (spawnData.session?.id) {
             jobPrompts.set(spawnData.session.id, prompt);
+            logger.context("VoiceJob: spawned", { sessionId: spawnData.session.id });
           }
         } else {
-          console.error("[VoiceJob] Failed to spawn voice job");
+          logger.error("context", "VoiceJob: failed to spawn voice job");
         }
 
         setSpawning(false);
         fetchJobs();
       } catch (err) {
-        console.error("[VoiceJob] Failed to spawn:", err);
+        logger.error("context", "VoiceJob: failed to spawn", err);
         setSpawning(false);
       }
     },

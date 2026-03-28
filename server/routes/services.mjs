@@ -2,6 +2,7 @@
  * /api/services routes — service management with port allocation
  * Migrated from src/app/api/services/route.ts
  */
+import { log, logError } from "../logger.mjs";
 
 import { readConfig } from "../../src/lib/config.js";
 import { RunConfigManager } from "../../src/lib/core/RunConfigManager.js";
@@ -87,7 +88,7 @@ export async function handle(req, res, url) {
 
         return json(res, { services: statuses, startOrder: svcMgr.getStartOrder(), projectName }), true;
       } catch (err) {
-        console.error("[api/services] start failed:", err);
+        logError("service", " start failed:", err);
         return json(res, { error: err instanceof Error ? err.message : "Failed to start services" }, 503), true;
       }
     }
@@ -116,7 +117,7 @@ export async function handle(req, res, url) {
 
         return json(res, data, r.status), true;
       } catch (err) {
-        console.error("[api/services] stop failed:", err);
+        logError("service", " stop failed:", err);
         return json(res, { error: "PTY server unreachable" }, 503), true;
       }
     }

@@ -4,6 +4,7 @@ import { AgentTerminal } from "@/components/Terminal";
 import { ConnectAgentModal } from "@/components/ConnectAgentModal";
 import { useSession } from "@/lib/SessionContext";
 import { useView } from "@/lib/ViewContext";
+import { logger } from "@/lib/logger";
 import { GripHorizontal, Loader2 } from "lucide-react";
 
 export function PersistentTerminal() {
@@ -89,6 +90,7 @@ export function PersistentTerminal() {
   }, [isDragging, handleMouseMove, handleMouseUp]);
 
   const handleConnect = async () => {
+    logger.terminal("PersistentTerminal: connecting agent");
     const ready = await checkPtyServer();
     if (!ready) await startPtyServer();
     setShowConnectModal(false);
@@ -97,6 +99,7 @@ export function PersistentTerminal() {
   };
 
   const handleSessionCreated = (newSessionId: string) => {
+    logger.terminal(`PersistentTerminal: session created ${newSessionId}`);
     connect(newSessionId);
   };
 

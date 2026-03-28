@@ -32,6 +32,7 @@ import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import pty from "@homebridge/node-pty-prebuilt-multiarch";
 import { initCronScheduler } from "./cron-scheduler.mjs";
+import { log, logWarn, logError } from "./logger.mjs";
 import {
   cleanupStale as registryCleanup,
   markRunning as registryMarkRunning,
@@ -116,7 +117,26 @@ function getAgentArgs(agentName) {
   return { shell: agentDef.shell, args };
 }
 
+// ── Rate Limiter (voice jobs) ─────────────────────────────────────────────
+
+const voiceJobTimestamps = [];
+const VOICE_RATE_LIMIT = 3;       // max jobs
+const VOICE_RATE_WINDOW = 10000;  // per 10 seconds
+
+function isVoiceRateLimited() {
+  const now = Date.now();
+  // Purge timestamps outside the window
+  while (voiceJobTimestamps.length && voiceJobTimestamps[0] < now - VOICE_RATE_WINDOW) {
+    voiceJobTimestamps.shift();
+  }
+  if (voiceJobTimestamps.length >= VOICE_RATE_LIMIT) return true;
+  voiceJobTimestamps.push(now);
+  return false;
+}
+
 // ── Session Store ──────────────────────────────────────────────────────────
+
+const MAX_SESSIONS = 50; // Max sessions kept in memory
 
 const sessions = new Map();
 
@@ -125,7 +145,24 @@ function stripAnsi(str) {
   return str.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, "").replace(/\x1B\][^\x07]*\x07/g, "");
 }
 
+function pruneCompletedSessions() {
+  if (sessions.size <= MAX_SESSIONS) return;
+  // Sort all completed sessions by startedAt ascending (oldest first)
+  const completed = Array.from(sessions.values())
+    .filter((s) => s.status !== "running" && s.status !== "starting")
+    .sort((a, b) => new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime());
+  const toRemove = sessions.size - MAX_SESSIONS;
+  for (let i = 0; i < Math.min(toRemove, completed.length); i++) {
+    const s = completed[i];
+    sessions.delete(s.id);
+    // Also clean up any stale activeProcesses entry
+    if (activeProcesses?.has(s.id)) activeProcesses.delete(s.id);
+    log("pty", `pruned old session ${s.id} (${s.agent}, ended ${s.endedAt})`);
+  }
+}
+
 function createSession(agent, cwd) {
+  pruneCompletedSessions();
   const id = randomUUID().slice(0, 8);
   const session = {
     id,
@@ -257,7 +294,7 @@ const httpServer = http.createServer(async (req, res) => {
           const handled = await handler(req, res, url);
           if (handled) return;
         } catch (err) {
-          console.error(`[pty-server] API route error:`, err);
+          logError("api", `API route error:`, err);
           if (!res.headersSent) {
             res.writeHead(500);
             res.end(JSON.stringify({ error: "Internal server error" }));
@@ -312,7 +349,7 @@ Important:
           if (s.cwd === cwd && (s.role === "app-start" || s.role === "stack") && s.status === "running") {
             const proc = activeProcesses.get(id);
             if (proc?.ptyProcess) {
-              console.log(`[pty-server] app-start: killing existing session=${id}`);
+              log("pty", `app-start: killing existing session=${id}`);
               proc.ptyProcess.kill();
               s.status = "completed";
               s.endedAt = new Date().toISOString();
@@ -338,7 +375,7 @@ Important:
         const session = createSession(agentName, cwd);
         session.role = "app-start";
 
-        console.log(`[pty-server] app-start: spawning ${agentName} session=${session.id} cwd=${cwd}`);
+        log("pty", `app-start: spawning ${agentName} session=${session.id} cwd=${cwd}`);
 
         const projectName = path.basename(cwd);
         const ptyProcess = pty.spawn(agentDef.shell, agentDef.args, {
@@ -367,7 +404,7 @@ Important:
         // Send the app-start prompt after agent initializes
         setTimeout(() => {
           ptyProcess.write(APP_START_PROMPT + "\r");
-          console.log(`[pty-server] app-start: sent prompt to session=${session.id}`);
+          log("pty", `app-start: sent prompt to session=${session.id}`);
         }, 3000);
 
         ptyProcess.onData((data) => {
@@ -385,11 +422,14 @@ Important:
                 const port = parseInt(portMatch[1], 10);
                 if (port >= 1024 && port <= 65535 && port !== 3000 && port !== 3001) {
                   session.detectedPort = port;
-                  console.log(`[pty-server] app-start session=${session.id} detected port: ${port}`);
+                  log("port", `app-start session=${session.id} detected port: ${port}`);
                   // Register in port registry (same as services path)
                   registryAllocatePort(projectName, cwd, "app", "web", port)
-                    .then(() => registryMarkRunning(port, ptyProcess.pid, session.id))
-                    .catch((err) => console.error(`[pty-server] app-start registry failed:`, err.message));
+                    .then(() => {
+                      registryMarkRunning(port, ptyProcess.pid, session.id);
+                      log("port", `app-start port=${port} registered for project=${projectName}`);
+                    })
+                    .catch((err) => logError("port", `app-start registry failed:`, err.message));
                 }
               }
             }
@@ -407,7 +447,7 @@ Important:
         });
 
         ptyProcess.onExit(({ exitCode }) => {
-          console.log(`[pty-server] app-start session=${session.id} exited: code=${exitCode}`);
+          log("pty", `app-start session=${session.id} exited: code=${exitCode}`);
           session.status = exitCode === 0 ? "completed" : "failed";
           session.exitCode = exitCode;
           session.endedAt = new Date().toISOString();
@@ -417,7 +457,7 @@ Important:
           }
         });
 
-        console.log(`[pty-server] app-start session spawned: id=${session.id} pid=${ptyProcess.pid}`);
+        log("pty", `app-start session spawned: id=${session.id} pid=${ptyProcess.pid}`);
         res.end(JSON.stringify({ session }));
       } catch (err) {
         res.writeHead(500);
@@ -452,7 +492,7 @@ Important:
 
         const proc = activeProcesses.get(found.id);
         if (proc?.ptyProcess) {
-          console.log(`[pty-server] stopping stack session=${found.id} pid=${found.session.pid}`);
+          log("pty", `stopping stack session=${found.id} pid=${found.session.pid}`);
           proc.ptyProcess.kill();
           found.session.status = "completed";
           found.session.endedAt = new Date().toISOString();
@@ -513,7 +553,7 @@ Important:
             session.serviceName = name;
 
             const command = svcDef.command;
-            console.log(`[pty-server] service:${name} spawning: ${command} in ${serviceCwd}`);
+            log("service", `service:${name} spawning: ${command} in ${serviceCwd}`);
 
             const serviceEnv = {
               ...process.env,
@@ -563,13 +603,14 @@ Important:
                     const port = parseInt(portMatch[1], 10);
                     if (port >= 3000 && port <= 65535) {
                       session.detectedPort = port;
-                      console.log(`[pty-server] service:${name} detected port: ${port}`);
+                      log("port", `service:${name} detected port: ${port}`);
                       // Register in port registry
                       if (projectName) {
                         try {
                           registryMarkRunning(port, ptyProcess.pid, session.id);
+                          log("port", `service:${name} port=${port} registered for project=${projectName}`);
                         } catch (err) {
-                          console.error(`[pty-server] registry markRunning failed:`, err.message);
+                          logError("port", `registry markRunning failed:`, err.message);
                         }
                       }
                     }
@@ -597,7 +638,7 @@ Important:
             });
 
             ptyProcess.onExit(({ exitCode }) => {
-              console.log(`[pty-server] service:${name} exited: code=${exitCode}`);
+              log("service", `service:${name} exited: code=${exitCode}`);
               session.status = "completed";
               session.exitCode = exitCode;
               session.endedAt = new Date().toISOString();
@@ -612,7 +653,7 @@ Important:
             setTimeout(() => {
               if (!resolved) {
                 resolved = true;
-                console.log(`[pty-server] service:${name} ready timeout — proceeding`);
+                logWarn("service", `service:${name} ready timeout — proceeding`);
                 resolve({ name, session, status: "running" });
               }
             }, 15000);
@@ -694,7 +735,7 @@ Important:
 
           const proc = activeProcesses.get(id);
           if (proc?.ptyProcess) {
-            console.log(`[pty-server] stopping ${s.role} session=${id} pid=${s.pid}`);
+            log("service", `stopping ${s.role} session=${id} pid=${s.pid}`);
             proc.ptyProcess.kill();
             s.status = "completed";
             s.endedAt = new Date().toISOString();
@@ -753,41 +794,61 @@ Important:
 
   // POST /voice-job — spawn a background agent session with a voice-transcribed prompt
   if (req.url === "/voice-job" && req.method === "POST") {
+    if (isVoiceRateLimited()) {
+      logWarn("voice", `voice-job: RATE LIMITED (max ${VOICE_RATE_LIMIT} per ${VOICE_RATE_WINDOW / 1000}s)`);
+      res.writeHead(429);
+      res.end(JSON.stringify({ error: "Too many voice jobs. Try again in a few seconds." }));
+      return;
+    }
+    const MAX_BODY = 512 * 1024; // 512 KB
     let body = "";
-    req.on("data", (chunk) => { body += chunk; });
+    let oversized = false;
+    req.on("data", (chunk) => {
+      body += chunk;
+      if (body.length > MAX_BODY) { oversized = true; req.destroy(); }
+    });
     req.on("end", () => {
+      if (oversized) {
+        res.writeHead(413);
+        res.end(JSON.stringify({ error: "Request body too large" }));
+        return;
+      }
       try {
         const { prompt, agent, cwd, skillContent } = JSON.parse(body);
-        console.log(`[pty-server] voice-job: received POST /voice-job`);
-        console.log(`[pty-server] voice-job:   prompt="${prompt?.substring(0, 150)}${(prompt?.length || 0) > 150 ? "..." : ""}"`);
-        console.log(`[pty-server] voice-job:   agent=${agent || "claude (default)"}`);
-        console.log(`[pty-server] voice-job:   cwd=${cwd}`);
-        console.log(`[pty-server] voice-job:   skillContent=${skillContent ? `${skillContent.length} bytes` : "NONE"}`);
+        log("voice", `voice-job: received POST /voice-job`);
+        log("voice", `voice-job:   prompt="${prompt?.substring(0, 150)}${(prompt?.length || 0) > 150 ? "..." : ""}"`);
+        log("voice", `voice-job:   agent=${agent || "claude (default)"} cwd=${cwd}`);
+        log("voice", `voice-job:   skillContent=${skillContent ? `${skillContent.length} bytes` : "NONE"}`);
 
         if (!prompt || !cwd) {
-          console.error(`[pty-server] voice-job: REJECTED — missing prompt or cwd`);
+          logError("voice", `voice-job: REJECTED — missing prompt or cwd`);
           res.writeHead(400);
           res.end(JSON.stringify({ error: "prompt and cwd required" }));
           return;
         }
 
         const agentName = agent || "claude";
+        if (!AGENT_COMMANDS[agentName]) {
+          logError("voice", `voice-job: REJECTED — unknown agent "${agentName}"`);
+          res.writeHead(400);
+          res.end(JSON.stringify({ error: `unknown agent "${agentName}". Valid: ${Object.keys(AGENT_COMMANDS).join(", ")}` }));
+          return;
+        }
         const agentDef = getAgentArgs(agentName);
-        console.log(`[pty-server] voice-job:   agentDef shell=${agentDef.shell} args=${JSON.stringify(agentDef.args)}`);
+        log("voice", `voice-job:   agentDef shell=${agentDef.shell} args=${JSON.stringify(agentDef.args)}`);
 
         // Build the full prompt: prepend skill context if provided
         const fullPrompt = skillContent
           ? `<context>\n${skillContent}\n</context>\n\n${prompt}`
           : prompt;
 
-        console.log(`[pty-server] voice-job:   fullPrompt length=${fullPrompt.length} bytes (skill context ${skillContent ? "injected" : "skipped"})`);
+        log("voice", `voice-job:   fullPrompt length=${fullPrompt.length} bytes (skill context ${skillContent ? "injected" : "skipped"})`);
 
         const session = createSession(agentName, cwd);
         session.role = "voice";
         session.prompt = prompt;
 
-        console.log(`[pty-server] voice-job: spawning ${agentName} session=${session.id} cwd=${cwd}`);
-        console.log(`[pty-server] voice-job:   env: OC_INPUT_MODE=voice`);
+        log("voice", `voice-job: spawning ${agentName} session=${session.id} cwd=${cwd}`);
 
         const ptyProcess = pty.spawn(agentDef.shell, agentDef.args, {
           name: "xterm-256color",
@@ -804,7 +865,7 @@ Important:
 
         session.pid = ptyProcess.pid;
         session.status = "running";
-        console.log(`[pty-server] voice-job: PTY spawned pid=${ptyProcess.pid} session=${session.id}`);
+        log("voice", `voice-job: PTY spawned pid=${ptyProcess.pid} session=${session.id}`);
 
         // Track process for reconnection
         activeProcesses.set(session.id, {
@@ -813,15 +874,39 @@ Important:
           outputBuffer: [],
         });
 
-        // Send the skill-enhanced prompt after agent initializes
-        console.log(`[pty-server] voice-job: waiting 3s for agent CLI to initialize...`);
-        setTimeout(() => {
-          console.log(`[pty-server] voice-job: injecting prompt into session=${session.id} (${fullPrompt.length} bytes)`);
-          ptyProcess.write(fullPrompt + "\r");
-          console.log(`[pty-server] voice-job: prompt sent to session=${session.id} ✓`);
-        }, 3000);
+        // Inject prompt once agent CLI is ready (detected from output) or after timeout
+        const READY_TIMEOUT = 10000; // 10s max wait
+        let promptInjected = false;
+
+        function injectPrompt() {
+          if (promptInjected) return;
+          promptInjected = true;
+          log("voice", `voice-job: injecting prompt into session=${session.id} (${fullPrompt.length} bytes)`);
+          // Use bracketed paste mode to prevent control character interpretation
+          ptyProcess.write(`\x1b[200~${fullPrompt}\x1b[201~\r`);
+          log("voice", `voice-job: prompt sent to session=${session.id}`);
+        }
+
+        // Ready patterns: Claude shows ">" or "❯", Codex shows ">", Gemini shows ">"
+        const readyPattern = /[>❯]\s*$/;
+        const readyTimeout = setTimeout(() => {
+          if (!promptInjected) {
+            logWarn("voice", `voice-job: ready-detection timed out after ${READY_TIMEOUT}ms, injecting anyway`);
+            injectPrompt();
+          }
+        }, READY_TIMEOUT);
 
         ptyProcess.onData((data) => {
+          // Check for agent ready prompt before injection
+          if (!promptInjected) {
+            const clean = stripAnsi(data);
+            if (readyPattern.test(clean)) {
+              log("voice", `voice-job: agent ready detected for session=${session.id}`);
+              clearTimeout(readyTimeout);
+              // Small delay to let the prompt fully render
+              setTimeout(() => injectPrompt(), 100);
+            }
+          }
           session.outputBytes += Buffer.byteLength(data);
           session.outputLines += (data.match(/\n/g) || []).length;
           const clean = stripAnsi(data);
@@ -846,7 +931,7 @@ Important:
           session.status = exitCode === 0 ? "completed" : "failed";
           session.exitCode = exitCode;
           session.endedAt = new Date().toISOString();
-          console.log(`[pty-server] voice-job: session=${session.id} exited code=${exitCode}`);
+          log("voice", `voice-job: session=${session.id} exited code=${exitCode}`);
           recordSessionHistory(session);
         });
 
@@ -885,7 +970,7 @@ Important:
         if (session) {
           session.inputBytes += Buffer.byteLength(command + "\n");
         }
-        console.log(`[pty-server] injected command to session=${sessionId}: ${command.substring(0, 80)}`);
+        log("pty", `injected command to session=${sessionId}: ${command.substring(0, 80)}`);
         res.end(JSON.stringify({ ok: true }));
       } catch (err) {
         res.writeHead(400);
@@ -947,7 +1032,7 @@ const activeProcesses = new Map();
 wss.on("connection", (ws) => {
   let currentSessionId = null;
 
-  console.log("[pty-server] client connected");
+  log("pty", "WebSocket client connected");
 
   ws.on("message", (raw) => {
     let msg;
@@ -958,7 +1043,7 @@ wss.on("connection", (ws) => {
     }
 
     if (msg.type !== "input") {
-      console.log(`[pty-server] received:`, msg.type, msg.agent || msg.sessionId || "");
+      log("pty", `ws received: ${msg.type} ${msg.agent || msg.sessionId || ""}`);
     }
 
     switch (msg.type) {
@@ -985,9 +1070,7 @@ wss.on("connection", (ws) => {
         currentSessionId = session.id;
 
         try {
-          console.log(
-            `[pty-server] spawning: ${agentDef.shell} ${spawnArgs.join(" ")} | agent=${agentName} session=${session.id} cwd=${cwd} (${cols}x${rows})${msg.resume ? ` resume=${msg.resume}` : ""}`
-          );
+          log("pty", `spawning: ${agentDef.shell} ${spawnArgs.join(" ")} | agent=${agentName} session=${session.id} cwd=${cwd} (${cols}x${rows})${msg.resume ? ` resume=${msg.resume}` : ""}`);
 
           const ptyProcess = pty.spawn(agentDef.shell, spawnArgs, {
             name: "xterm-256color",
@@ -1011,7 +1094,7 @@ wss.on("connection", (ws) => {
             outputBuffer: [], // Keep last 5000 chars for reconnection
           });
 
-          console.log(`[pty-server] spawned PID ${ptyProcess.pid} session=${session.id}`);
+          log("pty", `spawned PID ${ptyProcess.pid} session=${session.id}`);
 
           // Send session info to client
           ws.send(JSON.stringify({ type: "session", session }));
@@ -1035,7 +1118,7 @@ wss.on("connection", (ws) => {
                   const port = parseInt(portMatch[1], 10);
                   if (port >= 3000 && port <= 9999 && port !== 3000 && port !== 3001) {
                     session.detectedPort = port;
-                    console.log(`[pty-server] session=${session.id} detected app port: ${port}`);
+                    log("port", `session=${session.id} detected app port: ${port}`);
                   }
                 }
               }
@@ -1058,9 +1141,7 @@ wss.on("connection", (ws) => {
           });
 
           ptyProcess.onExit(({ exitCode, signal }) => {
-            console.log(
-              `[pty-server] session=${session.id} exited: code=${exitCode} signal=${signal}`
-            );
+            log("pty", `session=${session.id} exited: code=${exitCode} signal=${signal}`);
             session.status = "completed";
             session.exitCode = exitCode;
             session.endedAt = new Date().toISOString();
@@ -1079,11 +1160,7 @@ wss.on("connection", (ws) => {
             // Don't delete from activeProcesses yet — allow reconnection to see output
           });
         } catch (err) {
-          console.error(`[pty-server] SPAWN FAILED for ${agentName}:`, err.message);
-          console.error(`[pty-server]   shell: ${agentDef.shell}`);
-          console.error(`[pty-server]   args: ${JSON.stringify(agentDef.args)}`);
-          console.error(`[pty-server]   cwd: ${cwd}`);
-          console.error(`[pty-server]   full error:`, err);
+          logError("pty", `SPAWN FAILED for ${agentName}: ${err.message}`, { shell: agentDef.shell, args: agentDef.args, cwd, err });
           session.status = "failed";
           session.endedAt = new Date().toISOString();
           ws.send(
@@ -1102,7 +1179,7 @@ wss.on("connection", (ws) => {
         if (proc) {
           currentSessionId = sessionId;
           proc.clients.add(ws);
-          console.log(`[pty-server] client reconnected to session=${sessionId}`);
+          log("pty", `client reconnected to session=${sessionId}`);
 
           // Send session info
           const session = sessions.get(sessionId);
@@ -1146,7 +1223,7 @@ wss.on("connection", (ws) => {
             try {
               proc.ptyProcess.resize(msg.cols, msg.rows);
             } catch (e) {
-              console.log("[pty-server] resize error:", e.message);
+              logWarn("pty", "resize error:", e.message);
             }
           }
         }
@@ -1156,15 +1233,13 @@ wss.on("connection", (ws) => {
   });
 
   ws.on("close", () => {
-    console.log("[pty-server] client disconnected");
+    log("pty", "WebSocket client disconnected");
     // Remove this client from the session but DON'T kill the process
     if (currentSessionId) {
       const proc = activeProcesses.get(currentSessionId);
       if (proc) {
         proc.clients.delete(ws);
-        console.log(
-          `[pty-server] session=${currentSessionId} still has ${proc.clients.size} clients`
-        );
+        log("pty", `session=${currentSessionId} still has ${proc.clients.size} clients`);
         // Process keeps running even with 0 clients — user can reconnect
       }
     }
@@ -1178,20 +1253,20 @@ httpServer.listen(PORT, () => {
   try {
     const result = registryCleanup();
     if (result.removed > 0 || result.marked > 0) {
-      console.log(`[pty-server] port registry cleanup: marked=${result.marked} removed=${result.removed}`);
+      log("port", `registry cleanup: marked=${result.marked} removed=${result.removed}`);
     }
   } catch (err) {
-    console.error(`[pty-server] port registry cleanup failed:`, err.message);
+    logError("port", `registry cleanup failed:`, err.message);
   }
 
   // Initialize cron scheduler for calendar events
   initCronScheduler((opts) => {
     // Callback to spawn a PTY session when a cron job fires a "prompt" action
-    console.log(`[pty-server] cron spawning session: agent=${opts.agent}, cwd=${opts.cwd}, event=${opts.eventId || "manual"}`);
+    log("cron", `spawning session: agent=${opts.agent}, cwd=${opts.cwd}, event=${opts.eventId || "manual"}`);
 
     // Validate cwd exists
     if (!fs.existsSync(opts.cwd)) {
-      console.error(`[pty-server] cron spawn aborted: cwd does not exist: ${opts.cwd}`);
+      logError("cron", `spawn aborted: cwd does not exist: ${opts.cwd}`);
       if (opts.onComplete) {
         opts.onComplete({ exitCode: 1, timedOut: false, lastOutput: [`Error: directory ${opts.cwd} does not exist`] });
       }
@@ -1242,7 +1317,7 @@ httpServer.listen(PORT, () => {
     if (opts.timeout) {
       sessionTimeout = setTimeout(() => {
         if (session.status === "running") {
-          console.log(`[pty-server] cron session timeout: ${session.id} after ${opts.timeout / 60000}m`);
+          logWarn("cron", `session timeout: ${session.id} after ${opts.timeout / 60000}m`);
           try { ptyProcess.kill(); } catch {}
           session.status = "exited";
           session.exitCode = -1;
@@ -1274,14 +1349,14 @@ httpServer.listen(PORT, () => {
       // Small buffer after detecting ready to avoid racing
       setTimeout(() => {
         ptyProcess.write(opts.prompt + "\r");
-        console.log(`[pty-server] cron prompt delivered to session ${session.id}`);
+        log("cron", `prompt delivered to session ${session.id}`);
       }, 300);
     }
 
     // Fallback: if we don't detect a ready signal in time, send anyway
     readyTimeout = setTimeout(() => {
       if (!promptSent) {
-        console.log(`[pty-server] cron ready-wait timeout, sending prompt to ${session.id}`);
+        logWarn("cron", `ready-wait timeout, sending prompt to ${session.id}`);
         sendPromptWhenReady();
       }
     }, MAX_READY_WAIT_MS);

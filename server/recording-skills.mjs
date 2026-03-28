@@ -14,6 +14,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { log, logWarn } from "./logger.mjs";
 
 const HOME = process.env.HOME || process.env.USERPROFILE || "/tmp";
 const OC_HOME = path.join(HOME, ".open-canvas");
@@ -402,7 +403,7 @@ cat ~/.open-canvas/session-history/<project-file>.json
  * Non-destructive: only creates files that are missing.
  */
 export function ensureVoiceSkills() {
-  console.log(`[recording-skills] ensureVoiceSkills: SKILLS_DIR=${SKILLS_DIR}`);
+  log("skill", ` ensureVoiceSkills: SKILLS_DIR=${SKILLS_DIR}`);
   fs.mkdirSync(SKILLS_DIR, { recursive: true });
 
   let created = 0;
@@ -412,22 +413,46 @@ export function ensureVoiceSkills() {
     if (!fs.existsSync(filePath)) {
       fs.writeFileSync(filePath, content, "utf-8");
       created++;
-      console.log(`[recording-skills]   created: ${name}.md (${content.length} bytes)`);
+      log("skill", `   created: ${name}.md (${content.length} bytes)`);
     } else {
       skipped++;
     }
   }
-  console.log(`[recording-skills] ensureVoiceSkills: created=${created} skipped=${skipped} (already exist)`);
+  log("skill", ` ensureVoiceSkills: created=${created} skipped=${skipped} (already exist)`);
+}
+
+// ── Skill Context Cache ────────────────────────────────────────────────────
+
+let _cachedContext = null;   // { content: string, mtimeKey: string }
+
+/** Build a cache key from all skill file mtimes */
+function _skillMtimeKey() {
+  try {
+    const files = fs.readdirSync(SKILLS_DIR).filter((f) => f.endsWith(".md")).sort();
+    return files.map((f) => {
+      const stat = fs.statSync(path.join(SKILLS_DIR, f));
+      return `${f}:${stat.mtimeMs}`;
+    }).join("|");
+  } catch {
+    return "";
+  }
 }
 
 /**
  * Compose all skill files into a single context string.
  * Reads oc-system.md first (master context), then all other skills alphabetically.
- * This is what gets injected into the voice agent's prompt.
+ * Results are cached and invalidated when any skill file's mtime changes.
  */
 export function composeVoiceContext() {
-  console.log(`[recording-skills] composeVoiceContext: composing all skills...`);
   ensureVoiceSkills();
+
+  const mtimeKey = _skillMtimeKey();
+  if (_cachedContext && _cachedContext.mtimeKey === mtimeKey) {
+    log("skill", ` composeVoiceContext: returning cached (${_cachedContext.content.length} bytes)`);
+    return _cachedContext.content;
+  }
+
+  log("skill", ` composeVoiceContext: composing all skills (cache miss)...`);
 
   const systemPath = path.join(SKILLS_DIR, "oc-system.md");
   let context = "";
@@ -435,9 +460,9 @@ export function composeVoiceContext() {
   // Lead with the master context
   if (fs.existsSync(systemPath)) {
     context = fs.readFileSync(systemPath, "utf-8");
-    console.log(`[recording-skills]   loaded oc-system.md (${context.length} bytes)`);
+    log("skill", `   loaded oc-system.md (${context.length} bytes)`);
   } else {
-    console.warn(`[recording-skills]   WARNING: oc-system.md not found at ${systemPath}`);
+    logWarn("skill", `   WARNING: oc-system.md not found at ${systemPath}`);
   }
 
   // Append all other skill files
@@ -445,15 +470,16 @@ export function composeVoiceContext() {
     .filter((f) => f.endsWith(".md") && f !== "oc-system.md")
     .sort();
 
-  console.log(`[recording-skills]   found ${skillFiles.length} domain skill files: ${skillFiles.join(", ")}`);
+  log("skill", `   found ${skillFiles.length} domain skill files: ${skillFiles.join(", ")}`);
 
   for (const file of skillFiles) {
     const content = fs.readFileSync(path.join(SKILLS_DIR, file), "utf-8");
     context += "\n\n---\n\n" + content;
-    console.log(`[recording-skills]   appended ${file} (${content.length} bytes)`);
+    log("skill", `   appended ${file} (${content.length} bytes)`);
   }
 
-  console.log(`[recording-skills] composeVoiceContext: DONE — total context ${context.length} bytes`);
+  log("skill", ` composeVoiceContext: DONE — total context ${context.length} bytes`);
+  _cachedContext = { content: context, mtimeKey };
   return context;
 }
 

@@ -8,6 +8,7 @@ import {
   useRef,
   type ReactNode,
 } from "react";
+import { logger } from "@/lib/logger";
 
 // ── Types (client-safe mirrors of calendarConfig types) ──────────────────────
 
@@ -145,6 +146,7 @@ export function CalendarProvider({ children }: { children: ReactNode }) {
         });
         if (!res.ok) return null;
         const data = await res.json();
+        logger.context("Calendar: event created", { id: data.event?.id, title: event.title });
         await fetchEvents();
         return data.event as CalendarEvent;
       } catch {
@@ -164,6 +166,7 @@ export function CalendarProvider({ children }: { children: ReactNode }) {
         });
         if (!res.ok) return null;
         const data = await res.json();
+        logger.context("Calendar: event updated", { id });
         await fetchEvents();
         return data.event as CalendarEvent;
       } catch {
@@ -182,6 +185,7 @@ export function CalendarProvider({ children }: { children: ReactNode }) {
           body: JSON.stringify({ action: "delete", id }),
         });
         if (!res.ok) return false;
+        logger.context("Calendar: event deleted", { id });
         await fetchEvents();
         return true;
       } catch {

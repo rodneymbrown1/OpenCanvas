@@ -23,6 +23,7 @@ import { watch } from "chokidar";
 import fs from "node:fs";
 import path from "node:path";
 import { parse, stringify } from "yaml";
+import { log, logWarn, logError } from "./logger.mjs";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
@@ -125,7 +126,7 @@ function addNotification(eventId, title, message) {
   });
 
   writeYaml(NOTIFICATIONS_PATH, { notifications });
-  console.log(`[cron-scheduler] notification: ${title}`);
+  log("cron", ` notification: ${title}`);
 }
 
 // ── Event Update ─────────────────────────────────────────────────────────────
@@ -164,7 +165,7 @@ function writeAuditRecord(event, execution) {
   }
 
   writeYaml(HISTORY_PATH, data);
-  console.log(`[cron-scheduler] audit: ${event.id} — ${execution.exitCode === 0 ? "success" : "exit=" + execution.exitCode}`);
+  log("cron", ` audit: ${event.id} — ${execution.exitCode === 0 ? "success" : "exit=" + execution.exitCode}`);
 }
 
 // ── Project Locking ─────────────────────────────────────────────────────────
@@ -173,11 +174,11 @@ function acquireProjectLock(projectPath, eventId) {
   const lockKey = projectPath || "__global__";
   if (projectLocks.has(lockKey)) {
     const holder = projectLocks.get(lockKey);
-    console.log(`[cron-scheduler] project locked: ${lockKey} held by event ${holder.eventId}`);
+    log("cron", ` project locked: ${lockKey} held by event ${holder.eventId}`);
     return false;
   }
   projectLocks.set(lockKey, { eventId, acquiredAt: new Date().toISOString() });
-  console.log(`[cron-scheduler] lock acquired: ${lockKey} by event ${eventId}`);
+  log("cron", ` lock acquired: ${lockKey} by event ${eventId}`);
   return true;
 }
 
@@ -186,7 +187,7 @@ function releaseProjectLock(projectPath, eventId) {
   const holder = projectLocks.get(lockKey);
   if (holder && holder.eventId === eventId) {
     projectLocks.delete(lockKey);
-    console.log(`[cron-scheduler] lock released: ${lockKey} by event ${eventId}`);
+    log("cron", ` lock released: ${lockKey} by event ${eventId}`);
   }
 }
 
@@ -236,7 +237,7 @@ function executeJob(event) {
       // ── Gap 2: Verify agent is installed before spawning ──
       if (!isAgentAvailable(agentName)) {
         const errMsg = `Agent "${agentName}" is not installed. Install it or choose a different agent.`;
-        console.error(`[cron-scheduler] ${errMsg}`);
+        logError("cron", ` ${errMsg}`);
         addNotification(event.id, `Failed: ${event.title}`, errMsg);
         updateEventStatus(event.id, "failed", {
           startedAt: new Date().toISOString(),
@@ -372,7 +373,7 @@ function executeJob(event) {
       // ── Gap 11: Validate command against allowlist ──
       if (!isCommandAllowed(action.payload)) {
         const errMsg = `Command blocked: "${action.payload.slice(0, 60)}..." is not in the allowed command list. Allowed prefixes: ${COMMAND_ALLOWLIST.slice(0, 5).join(", ")}...`;
-        console.error(`[cron-scheduler] ${errMsg}`);
+        logError("cron", ` ${errMsg}`);
         addNotification(event.id, `Blocked: ${event.title}`, errMsg);
         updateEventStatus(event.id, "failed", {
           startedAt: new Date().toISOString(),
@@ -410,7 +411,7 @@ function executeJob(event) {
         const durationMs = Date.now() - new Date(cmdStart).getTime();
 
         if (err) {
-          console.error(`[cron-scheduler] command failed for ${event.id}:`, err.message);
+          logError("cron", ` command failed for ${event.id}:`, err.message);
           const execution = {
             startedAt: cmdStart,
             endedAt,
@@ -423,7 +424,7 @@ function executeJob(event) {
           writeAuditRecord(event, execution);
           addNotification(event.id, `Command failed: ${event.title}`, stderr || err.message);
         } else {
-          console.log(`[cron-scheduler] command succeeded for ${event.id}`);
+          log("cron", ` command succeeded for ${event.id}`);
           const execution = {
             startedAt: cmdStart,
             endedAt,
@@ -465,12 +466,12 @@ function scheduleEvent(event) {
   // Recurring event with cron expression
   if (event.recurrence && cron.validate(event.recurrence)) {
     const task = cron.schedule(event.recurrence, () => {
-      console.log(`[cron-scheduler] recurring job fired: ${event.id} — ${event.title}`);
+      log("cron", ` recurring job fired: ${event.id} — ${event.title}`);
       executeJob(event);
     });
     activeJobs.set(event.id, task);
     updateCronJobState(event.id, { status: "active", nextRun: "recurring" });
-    console.log(`[cron-scheduler] scheduled recurring: ${event.id} (${event.recurrence})`);
+    log("cron", ` scheduled recurring: ${event.id} (${event.recurrence})`);
     return;
   }
 
@@ -482,7 +483,7 @@ function scheduleEvent(event) {
   if (delayMs <= 0) {
     // Event is in the past and hasn't been triggered
     if (event.status === "pending") {
-      console.log(`[cron-scheduler] missed event: ${event.id} — ${event.title}`);
+      log("cron", ` missed event: ${event.id} — ${event.title}`);
       updateEventStatus(event.id, "missed");
       addNotification(event.id, `Missed: ${event.title}`, `This event was scheduled for ${event.startTime}`);
     }
@@ -491,7 +492,7 @@ function scheduleEvent(event) {
 
   // Use setTimeout for one-time future events
   const timeout = setTimeout(() => {
-    console.log(`[cron-scheduler] one-time job fired: ${event.id} — ${event.title}`);
+    log("cron", ` one-time job fired: ${event.id} — ${event.title}`);
     executeJob(event);
     activeJobs.delete(event.id);
   }, delayMs);
@@ -503,17 +504,17 @@ function scheduleEvent(event) {
 
   const fireAt = new Date(startMs).toLocaleString();
   updateCronJobState(event.id, { status: "active", nextRun: event.startTime });
-  console.log(`[cron-scheduler] scheduled one-time: ${event.id} at ${fireAt} (in ${Math.round(delayMs / 1000)}s)`);
+  log("cron", ` scheduled one-time: ${event.id} at ${fireAt} (in ${Math.round(delayMs / 1000)}s)`);
 }
 
 function syncJobs() {
   stopAllJobs();
   const events = readEvents();
-  console.log(`[cron-scheduler] syncing ${events.length} events`);
+  log("cron", ` syncing ${events.length} events`);
   for (const event of events) {
     scheduleEvent(event);
   }
-  console.log(`[cron-scheduler] ${activeJobs.size} active jobs`);
+  log("cron", ` ${activeJobs.size} active jobs`);
 }
 
 // ── File Watcher ─────────────────────────────────────────────────────────────
@@ -535,7 +536,7 @@ function startWatcher() {
     // Debounce to avoid rapid re-syncs during writes
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
-      console.log("[cron-scheduler] calendar.yaml changed, re-syncing...");
+      log("cron", " calendar.yaml changed, re-syncing...");
       syncJobs();
     }, 500);
   });
@@ -550,7 +551,7 @@ function startWatcher() {
 
 export function initCronScheduler(onSpawnSession) {
   spawnSessionCallback = onSpawnSession || null;
-  console.log("[cron-scheduler] initializing...");
+  log("cron", " initializing...");
 
   // Ensure calendar directory exists
   fs.mkdirSync(CALENDAR_DIR, { recursive: true });
@@ -561,11 +562,11 @@ export function initCronScheduler(onSpawnSession) {
   // Watch for changes
   startWatcher();
 
-  console.log("[cron-scheduler] ready");
+  log("cron", " ready");
 }
 
 export function stopCronScheduler() {
-  console.log("[cron-scheduler] stopping...");
+  log("cron", " stopping...");
   stopAllJobs();
   if (watcher) {
     watcher.close();
@@ -589,6 +590,6 @@ export function getCronStatus() {
  * Accepts a full CalendarEvent object.
  */
 export function triggerEventNow(event) {
-  console.log(`[cron-scheduler] manual trigger: ${event.id} — ${event.title}`);
+  log("cron", ` manual trigger: ${event.id} — ${event.title}`);
   executeJob(event);
 }

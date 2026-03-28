@@ -1,6 +1,7 @@
 // server/routes/ports.mjs — Port scanning, killing, registry, and PTY status
 // Translates: src/app/api/ports/**/*.ts, src/app/api/pty-status/route.ts
 
+import { logError } from "../logger.mjs";
 import { exec, execSync, spawn } from "child_process";
 import { createConnection } from "net";
 import { PortRegistry } from "../../src/lib/core/PortRegistry.js";
@@ -255,7 +256,7 @@ export async function handle(req, res, url) {
       const allocations = registry.getAllocations();
       jsonResponse(res, { allocations });
     } catch (err) {
-      console.error("[api/ports/registry] GET failed:", err);
+      logError("port", " GET failed:", err);
       jsonResponse(res, { allocations: [] });
     }
     return true;
@@ -332,7 +333,7 @@ export async function handle(req, res, url) {
 
       jsonResponse(res, { error: "Unknown action" }, 400);
     } catch (err) {
-      console.error("[api/ports/registry] POST failed:", err);
+      logError("port", " POST failed:", err);
       jsonResponse(
         res,
         { error: err instanceof Error ? err.message : "Internal error" },
