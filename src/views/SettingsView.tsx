@@ -1,5 +1,5 @@
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Key, Bot, Plug, FileText, Globe, Palette, Link2 } from "lucide-react";
 import { AgentSettingsPage } from "./SettingsAgentsView";
 import { ApiKeysPage } from "./SettingsApiKeysView";
@@ -22,7 +22,19 @@ const TABS = [
 type SettingsTab = (typeof TABS)[number]["id"];
 
 export default function SettingsView() {
-  const [tab, setTab] = useState<SettingsTab>("open-canvas");
+  const [tab, setTab] = useState<SettingsTab>(() => {
+    // Allow deep-linking to a specific tab via hash, e.g. #connections
+    const hash = window.location.hash.replace("#", "") as SettingsTab;
+    if (TABS.some((t) => t.id === hash)) return hash;
+    return "open-canvas";
+  });
+
+  useEffect(() => {
+    // Clear hash after reading so it doesn't persist across navigations
+    if (window.location.hash) {
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    }
+  }, []);
 
   return (
     <div className="flex h-full">

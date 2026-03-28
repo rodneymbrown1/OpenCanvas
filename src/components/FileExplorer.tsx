@@ -18,7 +18,9 @@ import {
   Database,
   Pencil,
   GitBranch,
+  Settings,
 } from "lucide-react";
+import { useView } from "../lib/ViewContext";
 
 interface FileEntry {
   name: string;
@@ -426,6 +428,7 @@ function FileTreeNode({ entry, depth }: { entry: FileEntry; depth: number }) {
 // ── Main FileExplorer ───────────────────────────────────────────────────────
 
 export function FileExplorer({ onFilePreview, rootDir, dragMode, onLinkDrop, onOpenGlobalPicker, readOnly, pollInterval }: FileExplorerProps) {
+  const { setView } = useView();
   const [tree, setTree] = useState<FileEntry[]>([]);
   const [root, setRoot] = useState("");
   const [loading, setLoading] = useState(true);
@@ -439,6 +442,9 @@ export function FileExplorer({ onFilePreview, rootDir, dragMode, onLinkDrop, onO
   const [gitCloneUrl, setGitCloneUrl] = useState("");
   const [gitCloning, setGitCloning] = useState(false);
   const [gitCloneError, setGitCloneError] = useState("");
+  const [gitCloneProgress, setGitCloneProgress] = useState<string[]>([]);
+  const [gitCloneAuthHint, setGitCloneAuthHint] = useState(false);
+  const gitCloneProgressRef = useRef<HTMLDivElement>(null);
 
   // Persistent expanded state — survives tree refreshes
   const expandedPathsRef = useRef<Set<string>>(new Set());
@@ -566,22 +572,83 @@ export function FileExplorer({ onFilePreview, rootDir, dragMode, onLinkDrop, onO
     if (!gitCloneTarget || !gitCloneUrl.trim()) return;
     setGitCloning(true);
     setGitCloneError("");
+    setGitCloneProgress([]);
+    setGitCloneAuthHint(false);
     try {
       const resp = await fetch("/api/files/git-clone", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url: gitCloneUrl.trim(), targetDir: gitCloneTarget }),
       });
-      const data = await resp.json();
-      if (!resp.ok) {
-        setGitCloneError(data.error || "Clone failed");
+
+      // If response is not SSE (e.g. 400 validation error), handle as JSON
+      const contentType = resp.headers.get("content-type") || "";
+      if (!contentType.includes("text/event-stream")) {
+        const data = await resp.json();
+        if (!resp.ok) {
+          setGitCloneError(data.error || "Clone failed");
+        }
+        setGitCloning(false);
         return;
       }
-      setGitCloneTarget(null);
-      setGitCloneUrl("");
-      expandedPathsRef.current.add(gitCloneTarget);
-      setExpandedVersion((v) => v + 1);
-      fetchTree();
+
+      // Read SSE stream
+      const reader = resp.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let cloneSucceeded = false;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // Parse SSE events from buffer
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() || "";
+
+        for (const part of parts) {
+          const dataLine = part.split("\n").find((l) => l.startsWith("data: "));
+          if (!dataLine) continue;
+          try {
+            const evt = JSON.parse(dataLine.slice(6));
+            if (evt.type === "progress") {
+              setGitCloneProgress((prev) => {
+                // Replace last line if it's a progress update (contains %)
+                const line = typeof evt.data === "string" ? evt.data : String(evt.data);
+                if (line.includes("%") && prev.length > 0 && prev[prev.length - 1].includes("%")) {
+                  return [...prev.slice(0, -1), line];
+                }
+                return [...prev, line];
+              });
+              // Auto-scroll progress
+              setTimeout(() => gitCloneProgressRef.current?.scrollTo({ top: gitCloneProgressRef.current.scrollHeight }), 0);
+            } else if (evt.type === "done") {
+              cloneSucceeded = true;
+              setGitCloneProgress((prev) => [...prev, "Clone complete!"]);
+            } else if (evt.type === "error") {
+              const errData = evt.data;
+              if (typeof errData === "object" && errData.authRequired) {
+                setGitCloneAuthHint(true);
+                setGitCloneError(errData.message || "Clone failed — authentication may be required");
+              } else {
+                setGitCloneError(typeof errData === "string" ? errData : errData?.message || "Clone failed");
+              }
+            }
+          } catch {}
+        }
+      }
+
+      if (cloneSucceeded) {
+        expandedPathsRef.current.add(gitCloneTarget);
+        setExpandedVersion((v) => v + 1);
+        fetchTree();
+        // Brief delay so user can see "Clone complete!" before closing
+        await new Promise((r) => setTimeout(r, 1000));
+        setGitCloneTarget(null);
+        setGitCloneUrl("");
+        setGitCloneProgress([]);
+      }
     } catch (err) {
       setGitCloneError(err instanceof Error ? err.message : "Clone failed");
     } finally {
@@ -862,7 +929,7 @@ export function FileExplorer({ onFilePreview, rootDir, dragMode, onLinkDrop, onO
               <>
                 <button onClick={() => { setSelectedPath(contextMenu.entry.path); setCreatingIn({ dir: contextMenu.entry.path, type: "file" }); expandedPathsRef.current.add(contextMenu.entry.path); setExpandedVersion((v) => v + 1); setContextMenu(null); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"><FilePlus size={13} /> New File Here</button>
                 <button onClick={() => { setSelectedPath(contextMenu.entry.path); setCreatingIn({ dir: contextMenu.entry.path, type: "folder" }); expandedPathsRef.current.add(contextMenu.entry.path); setExpandedVersion((v) => v + 1); setContextMenu(null); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"><FolderPlus size={13} /> New Folder Here</button>
-                <button onClick={() => { setGitCloneTarget(contextMenu.entry.path); setGitCloneUrl(""); setGitCloneError(""); setContextMenu(null); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"><GitBranch size={13} /> Git Clone</button>
+                <button onClick={() => { setGitCloneTarget(contextMenu.entry.path); setGitCloneUrl(""); setGitCloneError(""); setGitCloneProgress([]); setContextMenu(null); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"><GitBranch size={13} /> Git Clone</button>
               </>
             )}
             {!readOnly && (
@@ -883,8 +950,8 @@ export function FileExplorer({ onFilePreview, rootDir, dragMode, onLinkDrop, onO
         )}
 
         {gitCloneTarget && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => { if (!gitCloning) { setGitCloneTarget(null); setGitCloneUrl(""); setGitCloneError(""); } }}>
-            <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-lg shadow-xl p-4 w-[400px] max-w-[90vw]" onClick={(e) => e.stopPropagation()}>
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => { if (!gitCloning) { setGitCloneTarget(null); setGitCloneUrl(""); setGitCloneError(""); setGitCloneProgress([]); } }}>
+            <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-lg shadow-xl p-4 w-[440px] max-w-[90vw]" onClick={(e) => e.stopPropagation()}>
               <div className="flex items-center gap-2 mb-3">
                 <GitBranch size={16} className="text-[var(--accent)]" />
                 <span className="text-sm font-medium text-[var(--text-primary)]">Git Clone</span>
@@ -898,16 +965,37 @@ export function FileExplorer({ onFilePreview, rootDir, dragMode, onLinkDrop, onO
                 placeholder="https://github.com/user/repo.git"
                 value={gitCloneUrl}
                 onChange={(e) => { setGitCloneUrl(e.target.value); setGitCloneError(""); }}
-                onKeyDown={(e) => { if (e.key === "Enter" && gitCloneUrl.trim()) handleGitClone(); if (e.key === "Escape" && !gitCloning) { setGitCloneTarget(null); setGitCloneUrl(""); setGitCloneError(""); } }}
+                onKeyDown={(e) => { if (e.key === "Enter" && gitCloneUrl.trim() && !gitCloning) handleGitClone(); if (e.key === "Escape" && !gitCloning) { setGitCloneTarget(null); setGitCloneUrl(""); setGitCloneError(""); setGitCloneProgress([]); } }}
                 disabled={gitCloning}
                 className="w-full px-3 py-2 text-xs rounded border border-[var(--border)] bg-[var(--bg-primary)] text-[var(--text-primary)] placeholder:text-[var(--text-muted)] outline-none focus:border-[var(--accent)] disabled:opacity-50"
               />
+              {gitCloneProgress.length > 0 && (
+                <div
+                  ref={gitCloneProgressRef}
+                  className="mt-2 p-2 rounded bg-[var(--bg-primary)] border border-[var(--border)] max-h-[150px] overflow-y-auto"
+                >
+                  {gitCloneProgress.map((line, i) => (
+                    <p key={i} className="text-[10px] font-mono text-[var(--text-muted)] leading-relaxed whitespace-pre-wrap break-all">{line}</p>
+                  ))}
+                </div>
+              )}
               {gitCloneError && (
-                <p className="text-xs text-[var(--error)] mt-2">{gitCloneError}</p>
+                <div className="mt-2">
+                  <p className="text-xs text-[var(--error)]">{gitCloneError}</p>
+                  {gitCloneAuthHint && (
+                    <button
+                      onClick={() => { setGitCloneTarget(null); setGitCloneUrl(""); setGitCloneError(""); setGitCloneProgress([]); setGitCloneAuthHint(false); window.location.hash = "connections"; setView("settings"); }}
+                      className="mt-2 flex items-center gap-1.5 px-3 py-1.5 text-xs rounded bg-[var(--accent)] text-white hover:opacity-90"
+                    >
+                      <Settings size={12} />
+                      Authenticate GitHub in Settings
+                    </button>
+                  )}
+                </div>
               )}
               <div className="flex justify-end gap-2 mt-3">
                 <button
-                  onClick={() => { setGitCloneTarget(null); setGitCloneUrl(""); setGitCloneError(""); }}
+                  onClick={() => { setGitCloneTarget(null); setGitCloneUrl(""); setGitCloneError(""); setGitCloneProgress([]); }}
                   disabled={gitCloning}
                   className="px-3 py-1.5 text-xs rounded border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] disabled:opacity-50"
                 >Cancel</button>

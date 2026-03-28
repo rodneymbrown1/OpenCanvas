@@ -59,12 +59,13 @@ import { handle as handleCalendarConnections } from "./routes/calendar-connectio
 import { handle as handleVoiceRouting } from "./routes/voice-routing.mjs";
 import { handle as handleSessionHistory, appendHistory } from "./routes/session-history.mjs";
 import { handle as handleUpdates } from "./routes/updates.mjs";
+import { handle as handleGithubAuth } from "./routes/github-auth.mjs";
 
 const apiRouteHandlers = [
   handleFiles, handleConfig, handleSettings, handleProjects,
   handleCalendar, handleCalendarConnections, handlePorts, handleData, handleAgents,
   handleSkills, handleServices, handleFolderPicker, handleContextHandoff,
-  handleVoiceRouting, handleSessionHistory, handleUpdates,
+  handleVoiceRouting, handleSessionHistory, handleUpdates, handleGithubAuth,
 ];
 
 const HOME = process.env.HOME || process.env.USERPROFILE || "/tmp";

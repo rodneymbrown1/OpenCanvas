@@ -1,5 +1,5 @@
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Link2,
   Plus,
@@ -10,6 +10,8 @@ import {
   ExternalLink,
   Loader2,
   Calendar,
+  Github,
+  LogOut,
 } from "lucide-react";
 
 interface ConnectionInfo {
@@ -38,12 +40,26 @@ interface ProviderInfo {
   name: string;
 }
 
+interface GitHubAuthStatus {
+  authenticated: boolean;
+  ghInstalled: boolean;
+  username?: string | null;
+  message?: string;
+}
+
 export function ConnectionsPage() {
   const [connections, setConnections] = useState<ConnectionInfo[]>([]);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [syncing, setSyncing] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  // GitHub auth state
+  const [ghStatus, setGhStatus] = useState<GitHubAuthStatus | null>(null);
+  const [ghLoggingIn, setGhLoggingIn] = useState(false);
+  const [ghOneTimeCode, setGhOneTimeCode] = useState<string | null>(null);
+  const [ghProgress, setGhProgress] = useState<string[]>([]);
+  const ghProgressRef = useRef<HTMLDivElement>(null);
 
   const fetchConnections = useCallback(async () => {
     try {
@@ -62,6 +78,73 @@ export function ConnectionsPage() {
     const interval = setInterval(fetchConnections, 10_000);
     return () => clearInterval(interval);
   }, [fetchConnections]);
+
+  // GitHub auth
+  const fetchGhStatus = useCallback(async () => {
+    try {
+      const res = await fetch("/api/github-auth/status");
+      if (res.ok) setGhStatus(await res.json());
+    } catch {}
+  }, []);
+
+  useEffect(() => { fetchGhStatus(); }, [fetchGhStatus]);
+
+  const ghLogin = async () => {
+    setGhLoggingIn(true);
+    setGhOneTimeCode(null);
+    setGhProgress([]);
+    try {
+      const resp = await fetch("/api/github-auth/login", { method: "POST" });
+      const contentType = resp.headers.get("content-type") || "";
+      if (!contentType.includes("text/event-stream")) {
+        const data = await resp.json();
+        setMessage({ type: "error", text: data.error || "Login failed" });
+        setGhLoggingIn(false);
+        return;
+      }
+      const reader = resp.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() || "";
+        for (const part of parts) {
+          const dataLine = part.split("\n").find((l) => l.startsWith("data: "));
+          if (!dataLine) continue;
+          try {
+            const evt = JSON.parse(dataLine.slice(6));
+            if (evt.type === "code") {
+              setGhOneTimeCode(evt.data);
+            } else if (evt.type === "progress") {
+              setGhProgress((prev) => [...prev, evt.data]);
+              setTimeout(() => ghProgressRef.current?.scrollTo({ top: ghProgressRef.current.scrollHeight }), 0);
+            } else if (evt.type === "done") {
+              setMessage({ type: "success", text: "GitHub authentication successful!" });
+              setTimeout(() => setMessage(null), 4000);
+              await fetchGhStatus();
+            } else if (evt.type === "error") {
+              setMessage({ type: "error", text: typeof evt.data === "string" ? evt.data : "Login failed" });
+            }
+          } catch {}
+        }
+      }
+    } catch (err: any) {
+      setMessage({ type: "error", text: err.message || "Login failed" });
+    } finally {
+      setGhLoggingIn(false);
+      setGhOneTimeCode(null);
+    }
+  };
+
+  const ghLogout = async () => {
+    await fetch("/api/github-auth/logout", { method: "POST" });
+    await fetchGhStatus();
+    setMessage({ type: "success", text: "Logged out of GitHub" });
+    setTimeout(() => setMessage(null), 3000);
+  };
 
   const initiateOAuth = async (providerId: string) => {
     setConnecting(true);
@@ -153,8 +236,7 @@ export function ConnectionsPage() {
       </div>
 
       <p className="text-xs text-[var(--text-muted)]">
-        Connect external calendars to sync events bidirectionally. Events from connected
-        calendars appear on your Open Canvas calendar and local events can be pushed to external calendars.
+        Connect external services like GitHub and Google Calendar.
       </p>
 
       {/* Status message */}
@@ -170,6 +252,100 @@ export function ConnectionsPage() {
           {message.text}
         </div>
       )}
+
+      {/* GitHub Authentication */}
+      <div className="space-y-3">
+        <h3 className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider">
+          GitHub
+        </h3>
+        <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Github size={16} className="text-[var(--text-secondary)]" />
+              <span className="text-sm font-medium">GitHub</span>
+              {ghStatus?.authenticated ? (
+                <span className="flex items-center gap-1 text-xs text-green-400 bg-green-500/10 px-2 py-0.5 rounded-full">
+                  <CheckCircle size={10} />
+                  {ghStatus.username || "Connected"}
+                </span>
+              ) : ghStatus && !ghStatus.ghInstalled ? (
+                <span className="flex items-center gap-1 text-xs text-yellow-400 bg-yellow-500/10 px-2 py-0.5 rounded-full">
+                  <AlertCircle size={10} />
+                  CLI not installed
+                </span>
+              ) : (
+                <span className="flex items-center gap-1 text-xs text-[var(--text-muted)] bg-[var(--bg-tertiary)] px-2 py-0.5 rounded-full">
+                  Not connected
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-1">
+              {ghStatus?.authenticated && (
+                <button
+                  onClick={ghLogout}
+                  className="p-1.5 rounded hover:bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:text-red-400 transition-colors"
+                  title="Log out"
+                >
+                  <LogOut size={14} />
+                </button>
+              )}
+            </div>
+          </div>
+
+          <p className="text-xs text-[var(--text-muted)]">
+            {ghStatus?.authenticated
+              ? "Authenticated with GitHub. You can clone private repositories."
+              : "Authenticate with GitHub to clone private repositories. Requires the GitHub CLI (gh)."}
+          </p>
+
+          {!ghStatus?.authenticated && (
+            <>
+              {ghStatus && !ghStatus.ghInstalled ? (
+                <div className="text-xs text-yellow-400 bg-yellow-500/10 px-3 py-2 rounded">
+                  GitHub CLI is not installed. Install it with: <code className="bg-[var(--bg-tertiary)] px-1 py-0.5 rounded">brew install gh</code>
+                </div>
+              ) : (
+                <button
+                  onClick={ghLogin}
+                  disabled={ghLoggingIn}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-[var(--bg-secondary)] border border-[var(--border)] hover:border-[var(--accent)] text-sm transition-colors disabled:opacity-50"
+                >
+                  {ghLoggingIn ? <Loader2 size={14} className="animate-spin" /> : <Github size={14} />}
+                  {ghLoggingIn ? "Authenticating..." : "Authenticate with GitHub"}
+                </button>
+              )}
+            </>
+          )}
+
+          {/* One-time code display */}
+          {ghOneTimeCode && (
+            <div className="bg-[var(--bg-primary)] border border-[var(--accent)] rounded-lg p-3 space-y-1">
+              <p className="text-xs text-[var(--text-muted)]">Your one-time code:</p>
+              <p className="text-lg font-mono font-bold text-[var(--accent)] tracking-widest select-all">{ghOneTimeCode}</p>
+              <p className="text-xs text-[var(--text-muted)]">
+                A browser window should open. Paste this code there to complete authentication.
+              </p>
+            </div>
+          )}
+
+          {/* Auth progress */}
+          {ghProgress.length > 0 && (
+            <div
+              ref={ghProgressRef}
+              className="p-2 rounded bg-[var(--bg-primary)] border border-[var(--border)] max-h-[120px] overflow-y-auto"
+            >
+              {ghProgress.map((line, i) => (
+                <p key={i} className="text-[10px] font-mono text-[var(--text-muted)] leading-relaxed whitespace-pre-wrap break-all">{line}</p>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Calendar Connections */}
+      <h3 className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider">
+        Calendars
+      </h3>
 
       {/* Existing connections */}
       {connections.length > 0 && (

@@ -26,6 +26,14 @@ export function handle(req, res, url) {
   const pathname = url.pathname;
   const method = req.method;
 
+  // POST /api/settings/shutdown — gracefully shut down the app
+  if (pathname === "/api/settings/shutdown" && method === "POST") {
+    json(res, { shutdown: true, message: "Open Canvas is shutting down..." });
+    console.log("[pty-server] Shutdown requested via settings API");
+    setTimeout(() => process.exit(0), 500);
+    return true;
+  }
+
   if (pathname !== "/api/settings/global") return false;
 
   if (method === "GET") {

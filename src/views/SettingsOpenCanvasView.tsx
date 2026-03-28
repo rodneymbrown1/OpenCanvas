@@ -1,6 +1,6 @@
 
 import { useState, useEffect } from "react";
-import { Save, RefreshCw } from "lucide-react";
+import { Save, RefreshCw, Power } from "lucide-react";
 import type { AppSettings } from "@/lib/globalConfig";
 import { logger } from "@/lib/logger";
 
@@ -12,6 +12,7 @@ export function OpenCanvasSettingsPage() {
   const [settings, setSettings] = useState<AppSettings>({ ...DEFAULT_SETTINGS });
   const [loading, setLoading] = useState(true);
   const [saved, setSaved] = useState(false);
+  const [shuttingDown, setShuttingDown] = useState(false);
 
   useEffect(() => {
     fetch("/api/settings/global")
@@ -42,6 +43,16 @@ export function OpenCanvasSettingsPage() {
 
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
+  };
+
+  const shutdown = async () => {
+    if (!confirm("Shut down Open Canvas? This will stop the server and close all sessions.")) return;
+    setShuttingDown(true);
+    try {
+      await fetch("/api/settings/shutdown", { method: "POST" });
+    } catch {
+      // Expected — server shuts down, connection drops
+    }
   };
 
   if (loading) {
@@ -133,6 +144,30 @@ export function OpenCanvasSettingsPage() {
         <Save size={14} />
         {saved ? "Saved!" : "Save Settings"}
       </button>
+
+      {/* Shutdown */}
+      <section className="space-y-3 pt-4 border-t border-[var(--border)]">
+        <h2 className="text-sm font-semibold text-[var(--text-secondary)]">
+          Application
+        </h2>
+        <div className="bg-[var(--bg-secondary)] rounded-lg border border-[var(--border)] p-4 space-y-3">
+          <div>
+            <p className="text-sm text-[var(--text-secondary)]">Shut Down Open Canvas</p>
+            <p className="text-xs text-[var(--text-muted)] mt-1">
+              Stops the server, closes all active terminal sessions, and shuts down the application.
+              You will need to restart manually from the command line.
+            </p>
+          </div>
+          <button
+            onClick={shutdown}
+            disabled={shuttingDown}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-red-500/30 bg-red-500/10 text-red-400 text-sm hover:bg-red-500/20 transition-colors disabled:opacity-50"
+          >
+            <Power size={14} />
+            {shuttingDown ? "Shutting down..." : "Shut Down"}
+          </button>
+        </div>
+      </section>
     </div>
   );
 }

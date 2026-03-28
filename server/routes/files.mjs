@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { execFileSync, execFile } from "child_process";
+import { execFileSync, execFile, spawn } from "child_process";
 import { readConfig } from "../../src/lib/config.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -454,25 +454,85 @@ async function handleGitClone(req, res) {
       return json(res, { error: "Target directory not found" }, 404);
     }
 
-    // Run git clone asynchronously
-    await new Promise((resolve, reject) => {
-      execFile("git", ["clone", repoUrl], { cwd: targetDir, timeout: 120000 }, (err, stdout, stderr) => {
-        if (err) {
-          reject(new Error(stderr || err.message));
-        } else {
-          resolve(stdout);
-        }
-      });
-    });
-
-    // Determine cloned directory name from URL
     const repoName = path.basename(repoUrl.replace(/\.git$/, ""));
     const clonedPath = path.join(targetDir, repoName);
 
-    json(res, { cloned: true, url: repoUrl, path: clonedPath });
+    // Check if destination already exists
+    if (fs.existsSync(clonedPath)) {
+      return json(res, { error: `Directory "${repoName}" already exists in the target folder` }, 400);
+    }
+
+    // Stream progress via SSE
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    });
+
+    const sendEvent = (type, data) => {
+      res.write(`data: ${JSON.stringify({ type, data })}\n\n`);
+    };
+
+    const child = spawn("git", ["clone", "--progress", repoUrl], {
+      cwd: targetDir,
+      timeout: 120000,
+    });
+
+    // Git writes progress to stderr
+    child.stderr.on("data", (chunk) => {
+      const lines = chunk.toString().split(/\r?\n|\r/).filter(Boolean);
+      for (const line of lines) {
+        sendEvent("progress", line);
+      }
+    });
+
+    child.stdout.on("data", (chunk) => {
+      const lines = chunk.toString().split(/\r?\n|\r/).filter(Boolean);
+      for (const line of lines) {
+        sendEvent("progress", line);
+      }
+    });
+
+    // Collect stderr to detect auth errors
+    let stderrBuf = "";
+    child.stderr.on("data", (chunk) => { stderrBuf += chunk.toString(); });
+
+    child.on("close", (code) => {
+      if (code === 0) {
+        sendEvent("done", { cloned: true, url: repoUrl, path: clonedPath });
+      } else {
+        // Detect authentication / permission errors
+        const lowerErr = stderrBuf.toLowerCase();
+        const isAuthError =
+          lowerErr.includes("repository not found") ||
+          lowerErr.includes("authentication failed") ||
+          lowerErr.includes("could not read username") ||
+          lowerErr.includes("permission denied") ||
+          lowerErr.includes("terminal prompts disabled") ||
+          (code === 128 && lowerErr.includes("fatal:"));
+        sendEvent("error", {
+          message: `Git clone failed with exit code ${code}`,
+          authRequired: isAuthError,
+        });
+      }
+      res.end();
+    });
+
+    child.on("error", (err) => {
+      sendEvent("error", `Git clone failed: ${err.message}`);
+      res.end();
+    });
   } catch (err) {
-    json(res, {
-      error: `Git clone failed: ${err instanceof Error ? err.message : String(err)}`,
-    }, 500);
+    // If headers haven't been sent yet, respond with JSON error
+    if (!res.headersSent) {
+      json(res, {
+        error: `Git clone failed: ${err instanceof Error ? err.message : String(err)}`,
+      }, 500);
+    } else {
+      try {
+        res.write(`data: ${JSON.stringify({ type: "error", data: err instanceof Error ? err.message : String(err) })}\n\n`);
+      } catch {}
+      res.end();
+    }
   }
 }
