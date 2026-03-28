@@ -83,10 +83,6 @@ This release introduces the core feature set for Open Canvas:
 ## Coming Soon
 
 - **Open Canvas Launcher** — desktop app to launch Open Canvas without the terminal
-- **App start/stop via voice** — extend voice agent to manage running applications
-- **Multi-terminal tabs** — multiple agent sessions per project
-- **App Builder wizard** — guided app scaffolding from your data
-
 ---
 
 ## License
