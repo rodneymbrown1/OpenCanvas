@@ -39,10 +39,5 @@ preferences:
 session:
   lastSessionId: null
   lastAgent: claude
-<<<<<<< Updated upstream
-  lastWorkDir: 
-  connectedAt: 2026-03-27T22:55:52.161Z
-=======
   lastWorkDir: /Users/rodneymbrown/.open-canvas/projects/open-canvas-voice
   connectedAt: null
->>>>>>> Stashed changes
