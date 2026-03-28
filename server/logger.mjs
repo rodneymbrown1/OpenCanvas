@@ -27,6 +27,7 @@ const CATEGORIES = [
   "skill",     // Skills read/write
   "config",    // Config read/write
   "voice",     // Voice routing / recording
+  "git",       // Git repository operations
 ];
 
 // ── Verbose check ───────────────────────────────────────────────────────────

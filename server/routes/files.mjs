@@ -157,6 +157,11 @@ export function handle(req, res, url) {
     handleMoveFile(req, res, url);
     return true;
   }
+  // POST /api/files/write
+  if (p === "/api/files/write" && m === "POST") {
+    handleWriteFile(req, res);
+    return true;
+  }
   // POST /api/files/upload
   if (p === "/api/files/upload" && m === "POST") {
     handleUploadFile(req, res, url);
@@ -248,6 +253,36 @@ async function handleCreateFile(req, res) {
       fs.writeFileSync(filePath, "", "utf-8");
     }
     json(res, { path: filePath, created: true });
+  } catch (err) {
+    json(res, { error: String(err) }, 500);
+  }
+}
+
+// ── POST /api/files/write ────────────────────────────────────────────────────
+
+async function handleWriteFile(req, res) {
+  try {
+    const { path: filePath, content } = await parseBody(req);
+
+    if (!filePath) {
+      return json(res, { error: "No path provided" }, 400);
+    }
+
+    if (typeof content !== "string") {
+      return json(res, { error: "content must be a string" }, 400);
+    }
+
+    if (!fs.existsSync(filePath)) {
+      return json(res, { error: "File does not exist" }, 404);
+    }
+
+    const stat = fs.statSync(filePath);
+    if (stat.isDirectory()) {
+      return json(res, { error: "Cannot write to a directory" }, 400);
+    }
+
+    fs.writeFileSync(filePath, content, "utf-8");
+    json(res, { path: filePath, written: true });
   } catch (err) {
     json(res, { error: String(err) }, 500);
   }
@@ -473,16 +508,30 @@ async function handleGitClone(req, res) {
       res.write(`data: ${JSON.stringify({ type, data })}\n\n`);
     };
 
-    const child = spawn("git", ["clone", "--progress", repoUrl], {
-      cwd: targetDir,
-      timeout: 120000,
-    });
+    const child = spawn(
+      "git",
+      ["-c", "http.postBuffer=524288000", "clone", "--progress", repoUrl],
+      { cwd: targetDir, timeout: 600000 },
+    );
 
-    // Git writes progress to stderr
+    // Throttle progress events to avoid backpressure stalling git
+    let stderrBuf = "";
+    let lastProgressSend = 0;
+    let pendingLine = "";
+
     child.stderr.on("data", (chunk) => {
-      const lines = chunk.toString().split(/\r?\n|\r/).filter(Boolean);
-      for (const line of lines) {
-        sendEvent("progress", line);
+      const text = chunk.toString();
+      stderrBuf += text;
+
+      // Throttle: send at most every 200ms to avoid backpressure on SSE
+      const now = Date.now();
+      const lines = text.split(/\r?\n|\r/).filter(Boolean);
+      pendingLine = lines[lines.length - 1] || pendingLine;
+
+      if (now - lastProgressSend >= 200) {
+        lastProgressSend = now;
+        sendEvent("progress", pendingLine);
+        pendingLine = "";
       }
     });
 
@@ -493,28 +542,51 @@ async function handleGitClone(req, res) {
       }
     });
 
-    // Collect stderr to detect auth errors
-    let stderrBuf = "";
-    child.stderr.on("data", (chunk) => { stderrBuf += chunk.toString(); });
+    child.on("close", (code, signal) => {
+      // Flush any remaining progress line
+      if (pendingLine) sendEvent("progress", pendingLine);
 
-    child.on("close", (code) => {
       if (code === 0) {
         sendEvent("done", { cloned: true, url: repoUrl, path: clonedPath });
       } else {
-        // Detect authentication / permission errors
         const lowerErr = stderrBuf.toLowerCase();
-        const isAuthError =
-          lowerErr.includes("repository not found") ||
-          lowerErr.includes("authentication failed") ||
-          lowerErr.includes("could not read username") ||
-          lowerErr.includes("permission denied") ||
-          lowerErr.includes("terminal prompts disabled") ||
-          (code === 128 && lowerErr.includes("fatal:"));
-        sendEvent("error", {
-          message: `Git clone failed with exit code ${code}`,
-          authRequired: isAuthError,
-        });
+
+        // Detect timeout / signal kill (code is null when killed by signal)
+        if (code === null || signal) {
+          sendEvent("error", {
+            message: `Git clone timed out or was interrupted (signal: ${signal || "unknown"}). The repository may be too large or the connection too slow.`,
+            authRequired: false,
+          });
+        // Detect authentication / permission errors
+        } else {
+          const isAuthError =
+            lowerErr.includes("repository not found") ||
+            lowerErr.includes("authentication failed") ||
+            lowerErr.includes("could not read username") ||
+            lowerErr.includes("permission denied") ||
+            lowerErr.includes("terminal prompts disabled") ||
+            (code === 128 && lowerErr.includes("fatal:"));
+
+          // Detect network / transfer errors
+          const isNetworkError =
+            lowerErr.includes("early eof") ||
+            lowerErr.includes("unexpected disconnect") ||
+            lowerErr.includes("the remote end hung up");
+
+          let message = `Git clone failed with exit code ${code}`;
+          if (isNetworkError) {
+            message = "Git clone failed: connection interrupted during transfer. This can happen with large repositories on slow connections. Try again — it may succeed on retry.";
+          }
+
+          sendEvent("error", { message, authRequired: isAuthError });
+        }
       }
+
+      // Clean up partial clone directory on failure
+      if (code !== 0 && fs.existsSync(clonedPath)) {
+        try { fs.rmSync(clonedPath, { recursive: true, force: true }); } catch {}
+      }
+
       res.end();
     });
 

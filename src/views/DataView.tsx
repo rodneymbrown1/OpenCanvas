@@ -1,6 +1,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { FileExplorer } from "@/components/FileExplorer";
+import { FileEditModal } from "@/components/FileEditModal";
 import {
   Globe,
   RefreshCw,
@@ -20,6 +21,9 @@ export default function DataView() {
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [previewContent, setPreviewContent] = useState("");
   const [previewLoading, setPreviewLoading] = useState(false);
+
+  // File edit state
+  const [editFile, setEditFile] = useState<{ path: string; isNew?: boolean } | null>(null);
 
   // Layout
   const [showExplorer, setShowExplorer] = useState(true);
@@ -169,6 +173,7 @@ export default function DataView() {
               <FileExplorer
                 rootDir={globalDataDir}
                 onFilePreview={setPreviewPath}
+                onFileEdit={(path, isNew) => setEditFile({ path, isNew })}
                 pollInterval={3000}
               />
             </div>
@@ -221,6 +226,7 @@ export default function DataView() {
           )}
         </div>
       </div>
+      {editFile && <FileEditModal filePath={editFile.path} isNew={editFile.isNew} onClose={() => setEditFile(null)} />}
     </div>
   );
 }

@@ -21,6 +21,8 @@ import {
   Settings,
 } from "lucide-react";
 import { useView } from "../lib/ViewContext";
+import { logger } from "../lib/logger";
+import GitManagerModal from "./GitManagerModal";
 
 interface FileEntry {
   name: string;
@@ -32,6 +34,7 @@ interface FileEntry {
 
 interface FileExplorerProps {
   onFilePreview: (path: string) => void;
+  onFileEdit?: (path: string, isNew?: boolean) => void;
   rootDir?: string;
   dragMode?: "move" | "link";
   onLinkDrop?: (source: string, targetDir: string) => void;
@@ -140,6 +143,7 @@ function InlineCreateInput({
 }) {
   const [name, setName] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const submittedRef = useRef(false);
   const { onCreateSubmit, onCreateCancel } = useExplorer();
 
   useEffect(() => {
@@ -150,7 +154,11 @@ function InlineCreateInput({
     <form
       onSubmit={(e) => {
         e.preventDefault();
-        if (name.trim()) onCreateSubmit(name.trim());
+        e.stopPropagation();
+        if (name.trim()) {
+          submittedRef.current = true;
+          onCreateSubmit(name.trim());
+        }
       }}
       className="flex items-center gap-1 px-2 py-0.5"
       style={{ paddingLeft: `${depth * 12 + 8}px` }}
@@ -168,8 +176,16 @@ function InlineCreateInput({
         onChange={(e) => setName(e.target.value)}
         placeholder={type === "file" ? "filename.ts" : "folder-name"}
         className="flex-1 bg-[var(--bg-secondary)] border border-[var(--accent)] rounded px-1.5 py-0 text-xs focus:outline-none min-w-0"
-        onKeyDown={(e) => { if (e.key === "Escape") onCreateCancel(); }}
-        onBlur={() => { if (!name.trim()) onCreateCancel(); }}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === "Escape") onCreateCancel();
+        }}
+        onBlur={() => {
+          // Delay to let submit handler fire first
+          setTimeout(() => {
+            if (!submittedRef.current && !name.trim()) onCreateCancel();
+          }, 0);
+        }}
       />
     </form>
   );
@@ -188,6 +204,7 @@ function InlineRenameInput({
 }) {
   const [name, setName] = useState(initialName);
   const inputRef = useRef<HTMLInputElement>(null);
+  const submittedRef = useRef(false);
   const { onRenameSubmit, onRenameCancel } = useExplorer();
 
   useEffect(() => {
@@ -219,6 +236,8 @@ function InlineRenameInput({
     <form
       onSubmit={(e) => {
         e.preventDefault();
+        e.stopPropagation();
+        submittedRef.current = true;
         if (name.trim() && name.trim() !== initialName) onRenameSubmit(name.trim());
         else onRenameCancel();
       }}
@@ -242,10 +261,16 @@ function InlineRenameInput({
         value={name}
         onChange={(e) => setName(e.target.value)}
         className="flex-1 bg-[var(--bg-secondary)] border border-[var(--accent)] rounded px-1.5 py-0 text-xs focus:outline-none min-w-0"
-        onKeyDown={(e) => { if (e.key === "Escape") onRenameCancel(); }}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === "Escape") onRenameCancel();
+        }}
         onBlur={() => {
-          if (name.trim() && name.trim() !== initialName) onRenameSubmit(name.trim());
-          else onRenameCancel();
+          setTimeout(() => {
+            if (submittedRef.current) return;
+            if (name.trim() && name.trim() !== initialName) onRenameSubmit(name.trim());
+            else onRenameCancel();
+          }, 0);
         }}
       />
       {entry.isSymlink && (
@@ -427,7 +452,7 @@ function FileTreeNode({ entry, depth }: { entry: FileEntry; depth: number }) {
 
 // ── Main FileExplorer ───────────────────────────────────────────────────────
 
-export function FileExplorer({ onFilePreview, rootDir, dragMode, onLinkDrop, onOpenGlobalPicker, readOnly, pollInterval }: FileExplorerProps) {
+export function FileExplorer({ onFilePreview, onFileEdit, rootDir, dragMode, onLinkDrop, onOpenGlobalPicker, readOnly, pollInterval }: FileExplorerProps) {
   const { setView } = useView();
   const [tree, setTree] = useState<FileEntry[]>([]);
   const [root, setRoot] = useState("");
@@ -445,6 +470,8 @@ export function FileExplorer({ onFilePreview, rootDir, dragMode, onLinkDrop, onO
   const [gitCloneProgress, setGitCloneProgress] = useState<string[]>([]);
   const [gitCloneAuthHint, setGitCloneAuthHint] = useState(false);
   const gitCloneProgressRef = useRef<HTMLDivElement>(null);
+  const [gitManagerPath, setGitManagerPath] = useState<string | null>(null);
+  const gitRepoCacheRef = useRef<Map<string, boolean>>(new Map());
 
   // Persistent expanded state — survives tree refreshes
   const expandedPathsRef = useRef<Set<string>>(new Set());
@@ -506,7 +533,18 @@ export function FileExplorer({ onFilePreview, rootDir, dragMode, onLinkDrop, onO
 
   useEffect(() => { const h = () => setContextMenu(null); window.addEventListener("click", h); return () => window.removeEventListener("click", h); }, []);
 
-  const handleContextMenu = (e: React.MouseEvent, entry: FileEntry) => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY, entry }); };
+  const handleContextMenu = (e: React.MouseEvent, entry: FileEntry) => {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY, entry });
+    // Async-detect git repo for directories
+    if (entry.type === "directory" && !gitRepoCacheRef.current.has(entry.path)) {
+      logger.git("Detecting git repo", { path: entry.path });
+      fetch(`/api/git/detect?path=${encodeURIComponent(entry.path)}`)
+        .then((r) => r.json())
+        .then((d) => { logger.git("Git detect result", { path: entry.path, isRepo: d.isRepo }); gitRepoCacheRef.current.set(entry.path, !!d.isRepo); setContextMenu((prev) => prev ? { ...prev } : null); })
+        .catch((e) => { logger.error("git", "Git detect failed", e); });
+    }
+  };
 
   const getCreateDir = (): string => {
     if (!selectedPath) return root;
@@ -526,17 +564,23 @@ export function FileExplorer({ onFilePreview, rootDir, dragMode, onLinkDrop, onO
 
   const handleCreateSubmit = useCallback(async (name: string) => {
     if (!creatingIn) return;
+    const newPath = `${creatingIn.dir}/${name}`;
+    const isFile = creatingIn.type === "file";
     await fetch("/api/files/create", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        path: `${creatingIn.dir}/${name}`,
-        type: creatingIn.type === "folder" ? "directory" : "file",
+        path: newPath,
+        type: isFile ? "file" : "directory",
       }),
     });
     setCreatingIn(null);
     fetchTree();
-  }, [creatingIn, fetchTree]);
+    // Open edit modal for newly created files
+    if (isFile && onFileEdit) {
+      onFileEdit(newPath, true);
+    }
+  }, [creatingIn, fetchTree, onFileEdit]);
 
   const handleCreateCancel = useCallback(() => {
     setCreatingIn(null);
@@ -713,6 +757,9 @@ export function FileExplorer({ onFilePreview, rootDir, dragMode, onLinkDrop, onO
 
   // Keyboard navigation
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    // Don't intercept keys when inline create/rename inputs are active
+    if (creatingIn || renamingPath) return;
+
     const visiblePaths = flattenVisible(treeRef.current, expandedPathsRef.current);
     if (visiblePaths.length === 0) return;
 
@@ -801,7 +848,7 @@ export function FileExplorer({ onFilePreview, rootDir, dragMode, onLinkDrop, onO
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusedPath, selectedPath, readOnly, onFilePreview, toggleExpand]);
+  }, [focusedPath, selectedPath, readOnly, onFilePreview, toggleExpand, creatingIn, renamingPath]);
 
   // Context value — memoize to avoid unnecessary re-renders
   const explorerContextValue: ExplorerContextType = {
@@ -923,13 +970,25 @@ export function FileExplorer({ onFilePreview, rootDir, dragMode, onLinkDrop, onO
         {contextMenu && (
           <div className="fixed z-50 bg-[var(--bg-secondary)] border border-[var(--border)] rounded-lg shadow-xl py-1 min-w-[160px]" style={{ left: contextMenu.x, top: contextMenu.y }}>
             {contextMenu.entry.type === "file" && (
-              <button onClick={() => { onFilePreview(contextMenu.entry.path); setContextMenu(null); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"><Eye size={13} /> View File</button>
+              <>
+                <button onClick={() => { onFilePreview(contextMenu.entry.path); setContextMenu(null); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"><Eye size={13} /> View File</button>
+                {!readOnly && onFileEdit && (
+                  <button onClick={() => { onFileEdit(contextMenu.entry.path); setContextMenu(null); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"><Pencil size={13} /> Edit File</button>
+                )}
+                <button onClick={() => { const url = new URL(window.location.href); url.pathname = "/workspace"; url.searchParams.set("file", contextMenu.entry.path); window.open(url.toString(), "_blank"); setContextMenu(null); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"><ExternalLink size={13} /> Open in New Tab</button>
+              </>
             )}
             {contextMenu.entry.type === "directory" && !readOnly && (
               <>
                 <button onClick={() => { setSelectedPath(contextMenu.entry.path); setCreatingIn({ dir: contextMenu.entry.path, type: "file" }); expandedPathsRef.current.add(contextMenu.entry.path); setExpandedVersion((v) => v + 1); setContextMenu(null); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"><FilePlus size={13} /> New File Here</button>
                 <button onClick={() => { setSelectedPath(contextMenu.entry.path); setCreatingIn({ dir: contextMenu.entry.path, type: "folder" }); expandedPathsRef.current.add(contextMenu.entry.path); setExpandedVersion((v) => v + 1); setContextMenu(null); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"><FolderPlus size={13} /> New Folder Here</button>
                 <button onClick={() => { setGitCloneTarget(contextMenu.entry.path); setGitCloneUrl(""); setGitCloneError(""); setGitCloneProgress([]); setContextMenu(null); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"><GitBranch size={13} /> Git Clone</button>
+                {gitRepoCacheRef.current.get(contextMenu.entry.path) && (
+                  <>
+                    <div className="border-t border-[var(--border)] my-1" />
+                    <button onClick={() => { setGitManagerPath(contextMenu.entry.path); setContextMenu(null); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[var(--accent)] hover:bg-[var(--bg-tertiary)]"><Settings size={13} /> Manage Git Repo</button>
+                  </>
+                )}
               </>
             )}
             {!readOnly && (
@@ -1007,6 +1066,14 @@ export function FileExplorer({ onFilePreview, rootDir, dragMode, onLinkDrop, onO
               </div>
             </div>
           </div>
+        )}
+
+        {gitManagerPath && (
+          <GitManagerModal
+            repoPath={gitManagerPath}
+            onClose={() => setGitManagerPath(null)}
+            onRefresh={() => fetchTree()}
+          />
         )}
       </div>
     </ExplorerContext.Provider>

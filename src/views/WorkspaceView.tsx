@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from "react";
 import { FileExplorer } from "@/components/FileExplorer";
 import { AgentSelector } from "@/components/AgentSelector";
 import { FilePreviewModal } from "@/components/FilePreviewModal";
+import { FileEditModal } from "@/components/FileEditModal";
 import { FolderPickerModal } from "@/components/FolderPickerModal";
 import { GlobalDataPicker } from "@/components/GlobalDataPicker";
 import { ProjectStatusBar } from "@/components/ProjectStatusBar";
@@ -130,9 +131,23 @@ export default function WorkspaceView() {
   const [explorerWidth, setExplorerWidth] = useState(224);
   const [draggingExplorer, setDraggingExplorer] = useState(false);
   const [previewFile, setPreviewFile] = useState<string | null>(null);
+  const [editFile, setEditFile] = useState<{ path: string; isNew?: boolean } | null>(null);
   const [showFolderPicker, setShowFolderPicker] = useState(false);
   const [globalPickerOpen, setGlobalPickerOpen] = useState(false);
   const [sharedDataDir, setSharedDataDir] = useState<string | null>(null);
+
+  // Open file preview from URL ?file= param
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const filePath = params.get("file");
+    if (filePath) {
+      setPreviewFile(filePath);
+      // Clean the param from URL so refreshing doesn't re-open
+      const url = new URL(window.location.href);
+      url.searchParams.delete("file");
+      window.history.replaceState(null, "", url.pathname + url.search);
+    }
+  }, []);
 
   // Load config on mount
   useEffect(() => {
@@ -234,6 +249,7 @@ export default function WorkspaceView() {
               {workDir ? (
                 <FileExplorer
                   onFilePreview={setPreviewFile}
+                  onFileEdit={(path, isNew) => setEditFile({ path, isNew })}
                   onOpenGlobalPicker={sharedDataDir ? () => setGlobalPickerOpen(true) : undefined}
                   pollInterval={3000}
                 />
@@ -323,6 +339,7 @@ export default function WorkspaceView() {
 
       {/* Modals */}
       {previewFile && <FilePreviewModal filePath={previewFile} onClose={() => setPreviewFile(null)} />}
+      {editFile && <FileEditModal filePath={editFile.path} isNew={editFile.isNew} onClose={() => setEditFile(null)} />}
       {showFolderPicker && <FolderPickerModal onSelect={handleFolderSelect} onClose={() => setShowFolderPicker(false)} />}
       {globalPickerOpen && sharedDataDir && (
         <GlobalDataPicker sharedDataDir={sharedDataDir} onClose={() => setGlobalPickerOpen(false)} />
