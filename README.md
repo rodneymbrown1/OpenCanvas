@@ -2,10 +2,10 @@
   <img src="assets/open_canvas_logo.png" alt="Open Canvas" width="400" />
 </p>
 
-<p align="center"><strong>Build apps from your data using the coding agents you already have. </strong></p>
+<p align="center"><strong>Build apps from your data using the coding agents you already have.</strong></p>
 
 <p align="center">
-  Cost to run: <strong>$0</strong>. Uses your personal Claude Code, Codex, or Gemini CLI account. Runs locally.
+  <code>v1.0-beta</code> &nbsp;·&nbsp; Cost to run: <strong>$0</strong> &nbsp;·&nbsp; Runs locally &nbsp;·&nbsp; Uses your own Claude Code, Codex, or Gemini CLI
 </p>
 
 ---
@@ -25,111 +25,67 @@ Requires Node.js 18+ and at least one coding agent CLI installed (`claude`, `cod
 
 ## What It Does
 
-Open Canvas is a local browser IDE that wraps your terminal coding agents in a workspace with live app preview, file management, and project tracking.
-
-### Switch Between Agents
-
-Toggle between Claude, Codex, and Gemini with one click. Same project, different agent.
-
-<!-- ![Agent Switcher](assets/screenshots/agent-switcher.png) -->
-
-### Live App Preview
-
-Click **Run App** — the agent detects your stack and starts the dev server. Preview loads automatically in the workspace.
-
-<!-- ![App Preview](assets/screenshots/app-preview.png) -->
-
-### Jobs
-
-See active agent sessions, track what's running, view history.
-
-<!-- ![Jobs](assets/screenshots/jobs.png) -->
-
-### Usage & Cost
-
-Token usage and cost estimates per agent, per project. See what you're spending.
-
-<!-- ![Usage](assets/screenshots/usage.png) -->
-
-### Port Manager
-
-See which ports are in use across your projects. Kill processes directly.
-
-<!-- ![Ports](assets/screenshots/ports.png) -->
-
-### Global Shared Data
-
-Upload data once, share it across all your projects. No duplication. The agent reads a `skills.md` in your shared data directory to learn how you want your data organized and formatted.
-
-<!-- ![Data Manager](assets/screenshots/data-manager.png) -->
-
-### File Explorer with Drag & Drop
-
-VS Code-style file tree. Drag files from your desktop into any folder. Move files between directories. Right-click for context menu.
-
-### Settings
-
-- **Coding Agents** — choose active agent, CLI or API mode, permissions (read/write/execute/web)
-- **API Keys** — optional, for API mode
-- **MCP Servers** — connect external services via Model Context Protocol
-- **Project Config** — edit your project YAML directly
-
-<!-- ![Settings](assets/screenshots/settings.png) -->
-
-### Project Manager
-
-Manage multiple projects from one Open Canvas instance. Open projects in new tabs for side-by-side work. Global config at `~/.open-canvas/`.
+Open Canvas is a local browser IDE that wraps your terminal coding agents in a project workspace with live app preview, file management, calendar-driven project management, voice control, and job tracking.
 
 ---
 
-## Walkthrough
+## Demo
 
-### 1. Create a Project
+### Project Workspace
 
-Open the Project Manager and create a new project. Open Canvas sets up the directory with `data/` and `apps/` folders.
+The workspace is where you build. Each project gets a file explorer, integrated terminal, live app preview, and direct access to your coding agents. Switch between Claude, Codex, and Gemini in one click — same project, different agent. Drag files in from your desktop, run your dev server, and see changes live. Everything stays local.
 
-![Start a Project](assets/demo/start%20a%20project.jpg)
-![Name Your Project](assets/demo/start-project-2.jpg)
-![Project Created](assets/demo/start-project-3.jpg)
+![Project Workspace](assets/demo/02/project-workspace-demo.png)
 
-### 2. Your Workspace
+### Calendar Agents
 
-A blank slate project with file explorer, app preview area, and terminal. Drag files in from your desktop.
+Calendar agents connect your schedule to your projects. Events on your calendar can be linked to Open Canvas projects, so agents have context about deadlines, milestones, and what's planned next. The Project Manager uses calendar data to help prioritize work and surface upcoming tasks. Think of it as giving your coding agents a sense of time — they know what you're working on today, what's due this week, and what's coming up.
 
-![Initial Workspace](assets/demo/initial-project-workspace.jpg)
+![Calendar Agents](assets/demo/02/calendar-agents-demo.png)
 
-### 3. Connect a Coding Agent
+### Voice Recording
 
-Open Canvas detects which agents are installed on your machine. Click connect.
+The voice agent lets you talk to Open Canvas instead of typing. It has access to everything that's editable — your projects, workspaces, calendar, and settings. Start a recording session and give instructions by voice: create a new project, edit files, update calendar events, or direct your coding agent. The voice pipeline transcribes your speech, interprets the intent, and dispatches the action. Future versions may extend this to starting and stopping apps directly.
 
-![Connect Agent](assets/demo/connect%20coding%20agent.jpg)
+![Recording a Voice Command](assets/demo/02/record-feature-demo.png)
+![Resulting Project Created by Voice](assets/demo/02/voice-demo.png)
 
-### 4. Switch Between Agents
+### Jobs
 
-Connected to Claude? Switch to Codex or Gemini with one click. Same project, different agent.
+The Jobs view shows every active agent session. When you start a voice recording, it appears here as a running job — you can see the agent pick it up, the transcribed text that was extracted, and the prompt that was sent to Claude. All background work surfaces here so nothing runs invisibly.
 
-![Switch Agents](assets/demo/swtich%20between%20agents.jpg)
+![Jobs](assets/demo/02/jobs-demo.png)
 
-### 5. Jobs, Usage, and Ports
+### Agent Usage
 
-Track active sessions, monitor token spend, and manage ports — all in dedicated views.
+Track token consumption and cost estimates per agent, per project. See what each session costs and how usage breaks down over time.
 
-![Jobs, Usage, Ports](assets/demo/jobs-usage-ports-views.jpg)
+![Agent Usage](assets/demo/02/agent-usage-demo.png)
 
-### 6. Global Data and Settings
+---
 
-Manage shared data across projects and configure agents, API keys, MCP servers, and project settings.
+## v1.0-beta Release Notes
 
-![Global Data & Settings](assets/demo/global-data-and-settings.png)
+This release introduces the core feature set for Open Canvas:
+
+- **Project Workspaces** — full IDE experience with file explorer, terminal, live preview, and multi-agent support
+- **Calendar Agents** — calendar-aware project management that links events to projects and surfaces deadlines to agents
+- **Voice Control** — voice-to-action pipeline with access to projects, workspaces, calendar, and settings
+- **Job Tracking** — real-time view of all active agent sessions, transcriptions, and dispatched prompts
+- **Agent Usage** — per-project, per-agent token and cost tracking
+- **Multi-Agent Support** — switch between Claude Code, Codex, and Gemini CLI per project
+- **Global Shared Data** — upload data once, share across all projects via `skills.md`
+- **Git Integration** — clone, manage repos, and edit files directly from the workspace
+- **MCP Server Support** — connect external services via Model Context Protocol
 
 ---
 
 ## Coming Soon
 
 - **Open Canvas Launcher** — desktop app to launch Open Canvas without the terminal
+- **App start/stop via voice** — extend voice agent to manage running applications
 - **Multi-terminal tabs** — multiple agent sessions per project
 - **App Builder wizard** — guided app scaffolding from your data
-- **Document formatting pipeline** — auto-convert PDFs and docs to markdown
 
 ---
 
