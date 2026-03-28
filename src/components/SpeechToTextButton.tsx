@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Mic, Loader2 } from "lucide-react";
+import { Mic, Loader2, AlertTriangle } from "lucide-react";
 import SpeechToElementImport from "speech-to-element";
 
 // Handle CJS default export interop — Vite dev may wrap it as { default: class }
@@ -7,12 +7,17 @@ const SpeechToElement =
   (SpeechToElementImport as any).default || SpeechToElementImport;
 import { useJobs } from "@/lib/JobsContext";
 
+const isSpeechSupported =
+  typeof window !== "undefined" &&
+  !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
+
 export function SpeechToTextButton() {
   const { spawnVoiceJob, spawning, activeJobs } = useJobs();
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [showPreview, setShowPreview] = useState(false);
   const [targetSessionId, setTargetSessionId] = useState<string | null>(null);
+  const [speechError, setSpeechError] = useState<string | null>(null);
   const textRef = useRef<HTMLDivElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
 
@@ -56,7 +61,15 @@ export function SpeechToTextButton() {
       setShowPreview(true);
       setTranscript("");
       setTargetSessionId(null);
+      setSpeechError(null);
       if (textRef.current) textRef.current.textContent = "";
+
+      if (!isSpeechSupported) {
+        setSpeechError(
+          "Speech recognition is not supported in this browser. Use Chrome or Edge for voice commands."
+        );
+        return;
+      }
 
       setTimeout(() => {
         SpeechToElement.toggle("webspeech", {
@@ -75,9 +88,9 @@ export function SpeechToTextButton() {
           onResult: (text: string) => {
             setTranscript(text);
           },
-          onError: () => {
+          onError: (err: string) => {
             setIsRecording(false);
-            setShowPreview(false);
+            setSpeechError(err || "Microphone access denied or speech recognition failed.");
           },
         });
       }, 100);
@@ -156,6 +169,15 @@ export function SpeechToTextButton() {
                 <Loader2 size={24} className="text-[var(--accent)] animate-spin" />
                 <span className="text-xs text-[var(--accent)]">
                   Submitting...
+                </span>
+              </>
+            ) : speechError ? (
+              <>
+                <div className="w-16 h-16 rounded-full bg-red-500/10 flex items-center justify-center">
+                  <AlertTriangle size={24} className="text-red-400" />
+                </div>
+                <span className="text-xs text-red-400 text-center px-2">
+                  {speechError}
                 </span>
               </>
             ) : (

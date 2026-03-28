@@ -401,13 +401,46 @@ Important:
           outputBuffer: [],
         });
 
-        // Send the app-start prompt after agent initializes
-        setTimeout(() => {
-          ptyProcess.write(APP_START_PROMPT + "\r");
-          log("pty", `app-start: sent prompt to session=${session.id}`);
-        }, 3000);
+        // Wait for agent ready signal, then inject prompt via bracketed paste
+        const READY_TIMEOUT = 15000;
+        let promptSent = false;
+        const readyPattern = /[>❯]\s*$/;
+
+        function sendAppStartPrompt() {
+          if (promptSent) return;
+          promptSent = true;
+          if (readyTimer) clearTimeout(readyTimer);
+          // Delay to let any startup messages (e.g. installer notices) clear
+          setTimeout(() => {
+            ptyProcess.write(`\x1b[200~${APP_START_PROMPT}\x1b[201~`);
+            // Send Enter separately after a brief pause to ensure submission
+            setTimeout(() => {
+              ptyProcess.write("\r");
+              log("pty", `app-start: sent prompt to session=${session.id}`);
+            }, 200);
+          }, 1500);
+        }
+
+        const readyTimer = setTimeout(() => {
+          if (!promptSent) {
+            logWarn("pty", `app-start: ready-detection timed out after ${READY_TIMEOUT}ms, sending anyway`);
+            sendAppStartPrompt();
+          }
+        }, READY_TIMEOUT);
 
         ptyProcess.onData((data) => {
+          // Detect agent ready before prompt injection (check each line)
+          if (!promptSent) {
+            const clean = stripAnsi(data);
+            const cleanLines = clean.split("\n").filter((l) => l.trim());
+            for (const cl of cleanLines) {
+              if (readyPattern.test(cl.trim())) {
+                log("pty", `app-start: agent ready detected for session=${session.id}`);
+                sendAppStartPrompt();
+                break;
+              }
+            }
+          }
           session.outputBytes += Buffer.byteLength(data);
           session.outputLines += (data.match(/\n/g) || []).length;
           const clean = stripAnsi(data);
