@@ -5,6 +5,7 @@ import {
   updateProjectConfig,
   readProjectConfigRaw,
   writeProjectConfigRaw,
+  APP_CONFIG_CACHE_PATH,
 } from "../../src/lib/config.js";
 import {
   readGlobalConfig,
@@ -50,7 +51,8 @@ function deepMerge(target, source) {
   return result;
 }
 
-const APP_CONFIG_PATH = path.join(process.cwd(), "open-canvas.yaml");
+// Runtime config cache lives in ~/.open-canvas/, not in the repo
+const APP_CONFIG_PATH = APP_CONFIG_CACHE_PATH;
 
 function json(res, data, status = 200) {
   res.writeHead(status, { "Content-Type": "application/json" });

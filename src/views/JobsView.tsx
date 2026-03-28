@@ -1,5 +1,5 @@
 
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import {
   Activity,
   Clock,
@@ -31,6 +31,77 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function MiniTerminal({
+  lines,
+  maxLines = 5,
+  isRunning,
+}: {
+  lines: string[];
+  maxLines?: number;
+  isRunning: boolean;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [lines]);
+
+  const displayLines = lines.slice(-maxLines);
+
+  if (displayLines.length === 0) {
+    return (
+      <div className="mt-3 rounded-lg bg-[var(--bg-primary)] border border-[var(--border)] p-3">
+        <div className="flex items-center gap-2">
+          <Terminal size={12} className="text-[var(--text-muted)]" />
+          <span className="text-[10px] text-[var(--text-muted)] uppercase tracking-wide">
+            Output
+          </span>
+          {isRunning && (
+            <span className="text-[10px] text-[var(--accent)] animate-pulse ml-auto">
+              Working...
+            </span>
+          )}
+        </div>
+        <p className="text-[11px] text-[var(--text-muted)] font-mono italic mt-2">
+          Waiting for output...
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-3 rounded-lg bg-[var(--bg-primary)] border border-[var(--border)] overflow-hidden">
+      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-[var(--border)]/50">
+        <Terminal size={12} className="text-[var(--text-muted)]" />
+        <span className="text-[10px] text-[var(--text-muted)] uppercase tracking-wide">
+          Output
+        </span>
+        {isRunning && (
+          <span className="text-[10px] text-[var(--accent)] animate-pulse ml-auto">
+            Working...
+          </span>
+        )}
+      </div>
+      <div
+        ref={scrollRef}
+        className="px-3 py-2 max-h-[120px] overflow-y-auto"
+        style={{ scrollbarWidth: "thin" }}
+      >
+        {displayLines.map((line, i) => (
+          <p
+            key={i}
+            className="text-[11px] font-mono text-[var(--text-secondary)] leading-relaxed truncate"
+          >
+            {line}
+          </p>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function JobCard({ job, defaultExpanded }: { job: Job; defaultExpanded?: boolean }) {
@@ -196,13 +267,44 @@ function JobCard({ job, defaultExpanded }: { job: Job; defaultExpanded?: boolean
             )}
           </div>
 
-          {/* Activity indicator for running jobs */}
-          {isRunning && (
-            <div className="mt-3 flex items-center gap-2">
-              <div className="flex-1 h-1 bg-[var(--bg-tertiary)] rounded-full overflow-hidden">
-                <div className="h-full bg-[var(--accent)] rounded-full animate-pulse" style={{ width: "60%" }} />
+          {/* Live agent output stream */}
+          {(isRunning || (job.lastOutput && job.lastOutput.length > 0)) && (
+            <MiniTerminal
+              lines={job.lastOutput || []}
+              maxLines={isRunning ? 5 : 3}
+              isRunning={isRunning}
+            />
+          )}
+
+          {/* Session lifecycle logs */}
+          {job.logs && job.logs.length > 0 && (
+            <div className="mt-3">
+              <p className="text-[10px] text-[var(--text-muted)] uppercase tracking-wide mb-1">
+                Session Log
+              </p>
+              <div className="bg-[var(--bg-primary)] rounded border border-[var(--border)] px-2 py-1.5 max-h-32 overflow-y-auto space-y-0.5">
+                {job.logs.map((entry, i) => (
+                  <div key={i} className="flex items-start gap-2 text-[10px] font-mono">
+                    <span className="text-[var(--text-muted)] shrink-0">
+                      {new Date(entry.ts).toLocaleTimeString()}
+                    </span>
+                    <span className={`font-medium shrink-0 ${
+                      entry.event.includes("error") || entry.event.includes("timeout")
+                        ? "text-[var(--error)]"
+                        : entry.event.includes("ready") || entry.event.includes("submitted")
+                          ? "text-[var(--success)]"
+                          : "text-[var(--accent)]"
+                    }`}>
+                      {entry.event}
+                    </span>
+                    {entry.detail && (
+                      <span className="text-[var(--text-secondary)] truncate">
+                        {entry.detail}
+                      </span>
+                    )}
+                  </div>
+                ))}
               </div>
-              <span className="text-[10px] text-[var(--accent)]">Working...</span>
             </div>
           )}
         </div>

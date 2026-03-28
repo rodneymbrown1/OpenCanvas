@@ -140,13 +140,68 @@ curl -X PUT http://localhost:3001/api/calendar/<id> \\
 curl -X DELETE http://localhost:3001/api/calendar/<id>
 \`\`\`
 
+## Agent Tasks (Action Events)
+
+When the user says "agent task", "automated task", "have the agent do X", or anything that
+should run autonomously at the scheduled time, add an \`action\` object to the event.
+
+**Action types:**
+- \`"prompt"\` — Spawns an agent session and sends the payload as a prompt (most common)
+- \`"command"\` — Runs a shell command (must be in the allowlist: npm, git, python, curl, etc.)
+- \`"reminder"\` — Creates a notification with the payload as the message
+
+### Create an Agent Task
+\`\`\`bash
+curl -X POST http://localhost:3001/api/calendar \\
+  -H 'Content-Type: application/json' \\
+  -d '{"action":"create","event":{
+    "title":"...",
+    "startTime":"2026-03-28T15:00:00",
+    "endTime":"2026-03-28T16:00:00",
+    "target":"agent",
+    "action":{
+      "type":"prompt",
+      "payload":"The instruction for the agent to execute",
+      "agent":"claude",
+      "projectPath":"/optional/path/to/project"
+    }
+  }}'
+\`\`\`
+
+### Create a Reminder
+\`\`\`bash
+curl -X POST http://localhost:3001/api/calendar \\
+  -H 'Content-Type: application/json' \\
+  -d '{"action":"create","event":{
+    "title":"...",
+    "startTime":"2026-03-28T15:00:00",
+    "target":"user",
+    "action":{"type":"reminder","payload":"Don'\\''t forget to review the PR"}
+  }}'
+\`\`\`
+
+### Action Field Reference
+| Field | Required | Description |
+|-------|----------|-------------|
+| \`type\` | Yes | \`"prompt"\`, \`"command"\`, or \`"reminder"\` |
+| \`payload\` | Yes | The prompt text, shell command, or reminder message |
+| \`agent\` | No | Agent to use for prompt type (default: \`"claude"\`) |
+| \`projectPath\` | No | Working directory for the agent/command |
+
+### Target Field
+- \`"user"\` — Regular event or reminder for the user (default)
+- \`"agent"\` — Agent task that runs autonomously at the scheduled time
+- \`"both"\` — Notify user AND run agent task
+
 ## Rules
 - Parse natural language times ("tomorrow 3pm", "next Tuesday", "in 2 hours")
 - Default duration: 1 hour unless specified
 - All times in ISO 8601 format
 - Always confirm what was created/modified with the event details
 - For recurring events, use the recurrence field with cron syntax
-- Events can have an \`action\` field for agent-triggered tasks (e.g., run a pipeline)
+- If the user says "agent task", "automated", or "have it run" — always set \`target: "agent"\` and include an \`action\` with \`type: "prompt"\`
+- Use the user's words as the \`action.payload\` — rephrase into a clear agent instruction
+- If the user mentions a specific project, set \`action.projectPath\` to that project's path
 `,
 
   projects: `# Projects

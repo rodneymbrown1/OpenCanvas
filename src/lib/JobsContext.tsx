@@ -19,6 +19,8 @@ export interface Job {
   inputBytes: number;
   pid: number | null;
   prompt?: string; // The speech-to-text prompt that triggered this job
+  lastOutput?: string[]; // Last ~20 lines of clean agent output
+  logs?: Array<{ ts: string; event: string; detail?: string }>;
 }
 
 interface JobsContextType {

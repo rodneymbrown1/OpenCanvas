@@ -67,11 +67,13 @@ const apiRouteHandlers = [
   handleVoiceRouting, handleSessionHistory, handleUpdates,
 ];
 
-const CONFIG_PATH = join(process.cwd(), "open-canvas.yaml");
+const HOME = process.env.HOME || process.env.USERPROFILE || "/tmp";
+const APP_CONFIG_CACHE_PATH = join(HOME, ".open-canvas", "app-config.yaml");
 
 function loadConfig() {
+  // Read from the runtime cache in ~/.open-canvas/ (never from the repo)
   try {
-    return parse(readFileSync(CONFIG_PATH, "utf-8"));
+    return parse(readFileSync(APP_CONFIG_CACHE_PATH, "utf-8"));
   } catch {
     return { server: { pty_port: 3001 } };
   }
@@ -140,9 +142,13 @@ const MAX_SESSIONS = 50; // Max sessions kept in memory
 
 const sessions = new Map();
 
-// Strip ANSI escape codes for clean text
+// Strip ANSI escape codes and terminal control sequences for clean text
 function stripAnsi(str) {
-  return str.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, "").replace(/\x1B\][^\x07]*\x07/g, "");
+  return str
+    .replace(/\x1B\[[\?>=]?[0-9;]*[a-zA-Z]/g, "")  // CSI sequences (including DEC private mode)
+    .replace(/\x1B\][^\x07]*\x07/g, "")              // OSC sequences
+    .replace(/\x1B[()][0-9A-Z]/g, "")                // Character set selection
+    .replace(/\r/g, "");                               // Carriage returns
 }
 
 function pruneCompletedSessions() {
@@ -179,9 +185,17 @@ function createSession(agent, cwd) {
     pid: null,
     lastOutput: [],    // Last 20 lines of clean text
     detectedPort: null, // Port detected from output (e.g., "localhost:3002")
+    logs: [],          // Structured lifecycle events [{ts, event, detail}]
   };
   sessions.set(id, session);
   return session;
+}
+
+function sessionLog(session, event, detail) {
+  const entry = { ts: new Date().toISOString(), event, detail };
+  session.logs.push(entry);
+  if (session.logs.length > 100) session.logs.shift();
+  log("pty", `session=${session.id} ${event}: ${detail || ""}`);
 }
 
 function getAllSessions() {
@@ -898,7 +912,7 @@ Important:
 
         session.pid = ptyProcess.pid;
         session.status = "running";
-        log("voice", `voice-job: PTY spawned pid=${ptyProcess.pid} session=${session.id}`);
+        sessionLog(session, "spawned", `pid=${ptyProcess.pid} agent=${agentName}`);
 
         // Track process for reconnection
         activeProcesses.set(session.id, {
@@ -914,31 +928,79 @@ Important:
         function injectPrompt() {
           if (promptInjected) return;
           promptInjected = true;
-          log("voice", `voice-job: injecting prompt into session=${session.id} (${fullPrompt.length} bytes)`);
+          sessionLog(session, "prompt-inject", `${fullPrompt.length} bytes via bracketed paste`);
           // Use bracketed paste mode to prevent control character interpretation
-          ptyProcess.write(`\x1b[200~${fullPrompt}\x1b[201~\r`);
-          log("voice", `voice-job: prompt sent to session=${session.id}`);
+          // The \r (submit) MUST be a separate write after paste-end so the terminal
+          // treats it as a keypress, not pasted text.
+          ptyProcess.write(`\x1b[200~${fullPrompt}\x1b[201~`);
+          session.inputBytes += Buffer.byteLength(fullPrompt);
+          setTimeout(() => {
+            ptyProcess.write("\r");
+            sessionLog(session, "prompt-submitted", "carriage return sent");
+          }, 200);
         }
 
-        // Ready patterns: Claude shows ">" or "❯", Codex shows ">", Gemini shows ">"
-        const readyPattern = /[>❯]\s*$/;
+        // Auto-exit: after prompt is injected, wait for the agent to finish
+        // processing (output settles again), then send /exit to close the session.
+        const COMPLETION_SETTLE_MS = 5000; // 5s of silence after processing = done
+        const COMPLETION_TIMEOUT_MS = 120000; // 2 min max for voice job
+        let completionTimer = null;
+        let completionTimeout = null;
+
+        function scheduleAutoExit() {
+          completionTimeout = setTimeout(() => {
+            if (session.status === "running") {
+              sessionLog(session, "auto-exit-timeout", `${COMPLETION_TIMEOUT_MS / 1000}s max elapsed, sending /exit`);
+              ptyProcess.write("/exit\r");
+            }
+          }, COMPLETION_TIMEOUT_MS);
+        }
+
+        function resetCompletionSettle() {
+          if (completionTimer) clearTimeout(completionTimer);
+          completionTimer = setTimeout(() => {
+            if (session.status === "running") {
+              sessionLog(session, "auto-exit", "agent output settled, sending /exit");
+              if (completionTimeout) clearTimeout(completionTimeout);
+              ptyProcess.write("/exit\r");
+            }
+          }, COMPLETION_SETTLE_MS);
+        }
+
+        // Ready detection: wait for the agent's output to settle (no new data for 1.5s)
+        // This handles Claude CLI's TUI rendering which uses cursor positioning that
+        // makes text pattern matching unreliable after ANSI stripping.
+        // Also fall back to absolute timeout in case output never settles.
+        let settleTimer = null;
+        const SETTLE_MS = 1500;   // no output for 1.5s = ready
+
+        sessionLog(session, "waiting-ready", `settle=${SETTLE_MS}ms, timeout=${READY_TIMEOUT}ms`);
+
         const readyTimeout = setTimeout(() => {
           if (!promptInjected) {
-            logWarn("voice", `voice-job: ready-detection timed out after ${READY_TIMEOUT}ms, injecting anyway`);
+            if (settleTimer) clearTimeout(settleTimer);
+            sessionLog(session, "ready-timeout", `${READY_TIMEOUT}ms elapsed, injecting`);
             injectPrompt();
+            scheduleAutoExit();
           }
         }, READY_TIMEOUT);
 
         ptyProcess.onData((data) => {
-          // Check for agent ready prompt before injection
+          // Reset the settle timer on each output chunk
           if (!promptInjected) {
-            const clean = stripAnsi(data);
-            if (readyPattern.test(clean)) {
-              log("voice", `voice-job: agent ready detected for session=${session.id}`);
-              clearTimeout(readyTimeout);
-              // Small delay to let the prompt fully render
-              setTimeout(() => injectPrompt(), 100);
-            }
+            if (settleTimer) clearTimeout(settleTimer);
+            settleTimer = setTimeout(() => {
+              if (!promptInjected) {
+                sessionLog(session, "ready-settled", `output settled after ${SETTLE_MS}ms silence`);
+                clearTimeout(readyTimeout);
+                injectPrompt();
+                // Start watching for completion after injection
+                scheduleAutoExit();
+              }
+            }, SETTLE_MS);
+          } else {
+            // Prompt already injected — watch for completion settle
+            resetCompletionSettle();
           }
           session.outputBytes += Buffer.byteLength(data);
           session.outputLines += (data.match(/\n/g) || []).length;
@@ -961,10 +1023,13 @@ Important:
         });
 
         ptyProcess.onExit(({ exitCode }) => {
+          // Clean up auto-exit timers
+          if (completionTimer) clearTimeout(completionTimer);
+          if (completionTimeout) clearTimeout(completionTimeout);
           session.status = exitCode === 0 ? "completed" : "failed";
           session.exitCode = exitCode;
           session.endedAt = new Date().toISOString();
-          log("voice", `voice-job: session=${session.id} exited code=${exitCode}`);
+          sessionLog(session, "exited", `code=${exitCode} status=${session.status}`);
           recordSessionHistory(session);
         });
 
@@ -1010,6 +1075,24 @@ Important:
         res.end(JSON.stringify({ error: "Invalid JSON body" }));
       }
     });
+    return;
+  }
+
+  // GET /sessions/:id/logs — return structured lifecycle logs for a session
+  const logsMatch = req.url?.match(/^\/sessions\/(.+)\/logs$/);
+  if (logsMatch && req.method === "GET") {
+    const session = sessions.get(logsMatch[1]);
+    if (session) {
+      res.end(JSON.stringify({
+        sessionId: session.id,
+        agent: session.agent,
+        status: session.status,
+        logs: session.logs || [],
+      }));
+    } else {
+      res.writeHead(404);
+      res.end(JSON.stringify({ error: "Session not found" }));
+    }
     return;
   }
 

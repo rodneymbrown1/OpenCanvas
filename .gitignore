@@ -6,3 +6,6 @@ next-env.d.ts
 .DS_Store
 .env
 .env.local
+
+# Runtime config — generated from defaults, cached in ~/.open-canvas/
+open-canvas.yaml
