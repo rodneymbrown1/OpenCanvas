@@ -1,0 +1,217 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 880" font-family="'Segoe UI', system-ui, -apple-system, sans-serif">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0f1117;stop-opacity:1"/>
+      <stop offset="100%" style="stop-color:#1a1d2e;stop-opacity:1"/>
+    </linearGradient>
+    <linearGradient id="transientGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#ff6b6b;stop-opacity:0.15"/>
+      <stop offset="100%" style="stop-color:#ff6b6b;stop-opacity:0.05"/>
+    </linearGradient>
+    <linearGradient id="semiGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#ffd93d;stop-opacity:0.15"/>
+      <stop offset="100%" style="stop-color:#ffd93d;stop-opacity:0.05"/>
+    </linearGradient>
+    <linearGradient id="persistGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#6bcb77;stop-opacity:0.15"/>
+      <stop offset="100%" style="stop-color:#6bcb77;stop-opacity:0.05"/>
+    </linearGradient>
+    <linearGradient id="contextGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#4d96ff;stop-opacity:0.15"/>
+      <stop offset="100%" style="stop-color:#4d96ff;stop-opacity:0.05"/>
+    </linearGradient>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#000" flood-opacity="0.3"/>
+    </filter>
+    <marker id="arrowGreen" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#6bcb77" opacity="0.5"/>
+    </marker>
+    <marker id="arrowRed" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#ff6b6b" opacity="0.5"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1100" height="880" fill="url(#bgGrad)" rx="12"/>
+
+  <!-- Title -->
+  <text x="550" y="40" text-anchor="middle" fill="#e8e8e8" font-size="22" font-weight="700" letter-spacing="0.5">Open Canvas — Persistence Architecture</text>
+  <text x="550" y="63" text-anchor="middle" fill="#888" font-size="13">Layered file-based knowledge system with atomic writes and in-process locking</text>
+
+  <!-- ═══════════ LAYER 1: TRANSIENT ═══════════ -->
+  <rect x="30" y="85" width="500" height="160" rx="10" fill="url(#transientGrad)" stroke="#ff6b6b" stroke-width="1.5" stroke-opacity="0.4" filter="url(#shadow)"/>
+  <text x="50" y="108" fill="#ff6b6b" font-size="13" font-weight="700">LAYER 1 — TRANSIENT (In-Memory)</text>
+  <text x="490" y="108" text-anchor="end" fill="#ff6b6b" font-size="11" opacity="0.7">Lifetime: Process</text>
+
+  <rect x="50" y="120" width="220" height="105" rx="8" fill="#1e2130" stroke="#ff6b6b" stroke-width="0.8" stroke-opacity="0.3"/>
+  <text x="160" y="142" text-anchor="middle" fill="#ddd" font-size="12" font-weight="600">Session Map</text>
+  <text x="160" y="158" text-anchor="middle" fill="#999" font-size="10">pty-server.mjs</text>
+  <line x1="70" y1="165" x2="250" y2="165" stroke="#ff6b6b" stroke-opacity="0.2" stroke-width="0.5"/>
+  <text x="65" y="182" fill="#aaa" font-size="10">Max 50 sessions, auto-prunes</text>
+  <text x="65" y="197" fill="#aaa" font-size="10">100 lifecycle events/session</text>
+  <text x="65" y="212" fill="#aaa" font-size="10">20-line output buffer</text>
+
+  <rect x="290" y="120" width="220" height="105" rx="8" fill="#1e2130" stroke="#ff6b6b" stroke-width="0.8" stroke-opacity="0.3"/>
+  <text x="400" y="142" text-anchor="middle" fill="#ddd" font-size="12" font-weight="600">Port Registry</text>
+  <text x="400" y="158" text-anchor="middle" fill="#999" font-size="10">port-registry.mjs</text>
+  <line x1="310" y1="165" x2="490" y2="165" stroke="#ff6b6b" stroke-opacity="0.2" stroke-width="0.5"/>
+  <text x="305" y="182" fill="#aaa" font-size="10">Per-project port tracking</text>
+  <text x="305" y="197" fill="#aaa" font-size="10">Service discovery</text>
+  <text x="305" y="212" fill="#aaa" font-size="10">Runtime allocation</text>
+
+  <!-- ═══════════ LAYER 2: SEMI-PERSISTENT ═══════════ -->
+  <rect x="570" y="85" width="500" height="160" rx="10" fill="url(#semiGrad)" stroke="#ffd93d" stroke-width="1.5" stroke-opacity="0.4" filter="url(#shadow)"/>
+  <text x="590" y="108" fill="#ffd93d" font-size="13" font-weight="700">LAYER 2 — SEMI-PERSISTENT (Browser)</text>
+  <text x="1030" y="108" text-anchor="end" fill="#ffd93d" font-size="11" opacity="0.7">Lifetime: Tab / Browser</text>
+
+  <rect x="590" y="120" width="220" height="105" rx="8" fill="#1e2130" stroke="#ffd93d" stroke-width="0.8" stroke-opacity="0.3"/>
+  <text x="700" y="142" text-anchor="middle" fill="#ddd" font-size="12" font-weight="600">Session State</text>
+  <text x="700" y="158" text-anchor="middle" fill="#999" font-size="10">SessionContext.tsx</text>
+  <line x1="610" y1="165" x2="790" y2="165" stroke="#ffd93d" stroke-opacity="0.2" stroke-width="0.5"/>
+  <text x="605" y="182" fill="#aaa" font-size="10">Key: oc-session-{slug}</text>
+  <text x="605" y="197" fill="#aaa" font-size="10">Per-project isolation</text>
+  <text x="605" y="212" fill="#aaa" font-size="10">Hydrates on mount</text>
+
+  <rect x="830" y="120" width="220" height="105" rx="8" fill="#1e2130" stroke="#ffd93d" stroke-width="0.8" stroke-opacity="0.3"/>
+  <text x="940" y="142" text-anchor="middle" fill="#ddd" font-size="12" font-weight="600">Terminal State</text>
+  <text x="940" y="158" text-anchor="middle" fill="#999" font-size="10">TerminalContext.tsx</text>
+  <line x1="850" y1="165" x2="1030" y2="165" stroke="#ffd93d" stroke-opacity="0.2" stroke-width="0.5"/>
+  <text x="845" y="182" fill="#aaa" font-size="10">Key: oc-terminals-{slug}</text>
+  <text x="845" y="197" fill="#aaa" font-size="10">Tab layout persistence</text>
+  <text x="845" y="212" fill="#aaa" font-size="10">Legacy migration support</text>
+
+  <!-- ═══════════ LAYER 3: PERSISTENT ═══════════ -->
+  <rect x="30" y="270" width="1040" height="225" rx="10" fill="url(#persistGrad)" stroke="#6bcb77" stroke-width="1.5" stroke-opacity="0.4" filter="url(#shadow)"/>
+  <text x="50" y="293" fill="#6bcb77" font-size="13" font-weight="700">LAYER 3 — PERSISTENT (File System)</text>
+  <text x="1030" y="293" text-anchor="end" fill="#6bcb77" font-size="11" opacity="0.7">Lifetime: Permanent &middot; Atomic writes via safe-write.mjs</text>
+
+  <!-- Config -->
+  <rect x="50" y="308" width="230" height="168" rx="8" fill="#1e2130" stroke="#6bcb77" stroke-width="0.8" stroke-opacity="0.3"/>
+  <text x="165" y="330" text-anchor="middle" fill="#ddd" font-size="12" font-weight="600">Configuration (YAML)</text>
+  <line x1="70" y1="337" x2="260" y2="337" stroke="#6bcb77" stroke-opacity="0.2" stroke-width="0.5"/>
+  <rect x="65" y="347" width="10" height="10" rx="2" fill="#6bcb77" opacity="0.6"/>
+  <text x="82" y="357" fill="#aaa" font-size="10">~/.open-canvas/app-config.yaml</text>
+  <rect x="65" y="367" width="10" height="10" rx="2" fill="#6bcb77" opacity="0.6"/>
+  <text x="82" y="377" fill="#aaa" font-size="10">~/.open-canvas/global.yaml</text>
+  <rect x="65" y="387" width="10" height="10" rx="2" fill="#6bcb77" opacity="0.6"/>
+  <text x="82" y="397" fill="#aaa" font-size="10">{workDir}/open-canvas.yaml</text>
+  <rect x="65" y="407" width="10" height="10" rx="2" fill="#6bcb77" opacity="0.6"/>
+  <text x="82" y="417" fill="#aaa" font-size="10">{workDir}/run-config.yaml</text>
+  <text x="65" y="462" fill="#777" font-size="9" font-style="italic">Cached with file-change detection</text>
+
+  <!-- Session History -->
+  <rect x="300" y="308" width="230" height="168" rx="8" fill="#1e2130" stroke="#6bcb77" stroke-width="0.8" stroke-opacity="0.3"/>
+  <text x="415" y="330" text-anchor="middle" fill="#ddd" font-size="12" font-weight="600">Session History (JSON)</text>
+  <line x1="320" y1="337" x2="510" y2="337" stroke="#6bcb77" stroke-opacity="0.2" stroke-width="0.5"/>
+  <rect x="315" y="347" width="10" height="10" rx="2" fill="#6bcb77" opacity="0.6"/>
+  <text x="332" y="357" fill="#aaa" font-size="10">~/.open-canvas/session-history/</text>
+  <text x="332" y="375" fill="#aaa" font-size="10">Per-project JSON (append-only)</text>
+  <text x="332" y="393" fill="#aaa" font-size="10">Completed session metadata</text>
+  <text x="332" y="411" fill="#aaa" font-size="10">Exit codes, durations, outputs</text>
+  <text x="315" y="462" fill="#777" font-size="9" font-style="italic">Atomic writes (tmp + rename)</text>
+
+  <!-- Skills & Knowledge -->
+  <rect x="550" y="308" width="230" height="168" rx="8" fill="#1e2130" stroke="#6bcb77" stroke-width="0.8" stroke-opacity="0.3"/>
+  <text x="665" y="330" text-anchor="middle" fill="#ddd" font-size="12" font-weight="600">Skills &amp; Knowledge (MD)</text>
+  <line x1="570" y1="337" x2="760" y2="337" stroke="#6bcb77" stroke-opacity="0.2" stroke-width="0.5"/>
+  <rect x="565" y="347" width="10" height="10" rx="2" fill="#6bcb77" opacity="0.6"/>
+  <text x="582" y="357" fill="#aaa" font-size="10">.open-canvas/skills.md</text>
+  <rect x="565" y="367" width="10" height="10" rx="2" fill="#6bcb77" opacity="0.6"/>
+  <text x="582" y="377" fill="#aaa" font-size="10">.open-canvas/PROJECT.md</text>
+  <rect x="565" y="387" width="10" height="10" rx="2" fill="#6bcb77" opacity="0.6"/>
+  <text x="582" y="397" fill="#aaa" font-size="10">~/.open-canvas/shared-data/skills.md</text>
+  <rect x="565" y="407" width="10" height="10" rx="2" fill="#6bcb77" opacity="0.6"/>
+  <text x="582" y="417" fill="#aaa" font-size="10">GLOBAL_DATA.md</text>
+  <text x="565" y="462" fill="#777" font-size="9" font-style="italic">Agent-readable &amp; agent-writable</text>
+
+  <!-- Shared Data -->
+  <rect x="800" y="308" width="250" height="168" rx="8" fill="#1e2130" stroke="#6bcb77" stroke-width="0.8" stroke-opacity="0.3"/>
+  <text x="925" y="330" text-anchor="middle" fill="#ddd" font-size="12" font-weight="600">Shared Data Pipeline</text>
+  <line x1="820" y1="337" x2="1030" y2="337" stroke="#6bcb77" stroke-opacity="0.2" stroke-width="0.5"/>
+  <text x="815" y="357" fill="#bbb" font-size="10" font-weight="600">3-phase flow:</text>
+  <text x="825" y="378" fill="#6bcb77" font-size="11">raw/ &#8594; formatted/ &#8594; integrated/</text>
+  <text x="815" y="400" fill="#aaa" font-size="10">Cross-project symlinks</text>
+  <text x="815" y="418" fill="#aaa" font-size="10">Multipart upload support</text>
+  <text x="815" y="436" fill="#aaa" font-size="10">~/.open-canvas/shared-data/</text>
+  <text x="815" y="462" fill="#777" font-size="9" font-style="italic">Global &amp; per-project scoping</text>
+
+  <!-- ═══════════ LAYER 4: CONTEXTUAL ═══════════ -->
+  <rect x="30" y="520" width="1040" height="150" rx="10" fill="url(#contextGrad)" stroke="#4d96ff" stroke-width="1.5" stroke-opacity="0.4" filter="url(#shadow)"/>
+  <text x="50" y="543" fill="#4d96ff" font-size="13" font-weight="700">LAYER 4 — CONTEXTUAL (Dynamic Generation)</text>
+  <text x="1030" y="543" text-anchor="end" fill="#4d96ff" font-size="11" opacity="0.7">Lifetime: On-Demand</text>
+
+  <rect x="50" y="558" width="310" height="92" rx="8" fill="#1e2130" stroke="#4d96ff" stroke-width="0.8" stroke-opacity="0.3"/>
+  <text x="205" y="580" text-anchor="middle" fill="#ddd" font-size="12" font-weight="600">Agent Handoff</text>
+  <text x="205" y="596" text-anchor="middle" fill="#999" font-size="10">contextSharing.ts</text>
+  <line x1="70" y1="603" x2="340" y2="603" stroke="#4d96ff" stroke-opacity="0.2" stroke-width="0.5"/>
+  <text x="65" y="620" fill="#aaa" font-size="10">AGENT_HANDOFF.md &#8212; git state, diffs, last output</text>
+  <text x="65" y="637" fill="#aaa" font-size="10">Auto-generated on agent switch</text>
+
+  <rect x="385" y="558" width="310" height="92" rx="8" fill="#1e2130" stroke="#4d96ff" stroke-width="0.8" stroke-opacity="0.3"/>
+  <text x="540" y="580" text-anchor="middle" fill="#ddd" font-size="12" font-weight="600">Context File Discovery</text>
+  <line x1="405" y1="593" x2="675" y2="593" stroke="#4d96ff" stroke-opacity="0.2" stroke-width="0.5"/>
+  <text x="400" y="611" fill="#aaa" font-size="10">CLAUDE.md / GEMINI.md / .cursorrules</text>
+  <text x="400" y="629" fill="#aaa" font-size="10">PROJECT_CONTEXT.md / README.md</text>
+  <text x="400" y="644" fill="#aaa" font-size="10">Auto-discovered &amp; injected into sessions</text>
+
+  <rect x="720" y="558" width="330" height="92" rx="8" fill="#1e2130" stroke="#4d96ff" stroke-width="0.8" stroke-opacity="0.3"/>
+  <text x="885" y="580" text-anchor="middle" fill="#ddd" font-size="12" font-weight="600">Skills Template Generation</text>
+  <text x="885" y="596" text-anchor="middle" fill="#999" font-size="10">SkillsManager.ts</text>
+  <line x1="740" y1="603" x2="1030" y2="603" stroke="#4d96ff" stroke-opacity="0.2" stroke-width="0.5"/>
+  <text x="735" y="620" fill="#aaa" font-size="10">Tech stack, conventions, architecture docs</text>
+  <text x="735" y="637" fill="#aaa" font-size="10">Agents maintain their own documentation</text>
+
+  <!-- ═══════════ FLOW ARROWS ═══════════ -->
+  <path d="M 280 245 L 280 258 Q 280 268 290 268 L 410 268 L 410 308" fill="none" stroke="#ff6b6b" stroke-width="1.2" stroke-dasharray="4,3" opacity="0.5" marker-end="url(#arrowRed)"/>
+  <text x="348" y="264" fill="#ff6b6b" font-size="9" opacity="0.7">on complete</text>
+
+  <path d="M 665 476 L 665 520" fill="none" stroke="#6bcb77" stroke-width="1.2" stroke-dasharray="4,3" opacity="0.5" marker-end="url(#arrowGreen)"/>
+  <text x="670" y="502" fill="#6bcb77" font-size="9" opacity="0.7">feeds into</text>
+
+  <!-- ═══════════ WRITE SAFETY SECTION ═══════════ -->
+  <rect x="30" y="690" width="505" height="170" rx="10" fill="#12141f" stroke="#c084fc" stroke-width="1" stroke-opacity="0.4" filter="url(#shadow)"/>
+  <text x="50" y="715" fill="#c084fc" font-size="13" font-weight="700">WRITE SAFETY (server/lib/safe-write.mjs)</text>
+
+  <rect x="50" y="728" width="220" height="55" rx="6" fill="#1e2130" stroke="#c084fc" stroke-width="0.6" stroke-opacity="0.4"/>
+  <text x="160" y="748" text-anchor="middle" fill="#c084fc" font-size="11" font-weight="600">atomicWriteSync()</text>
+  <text x="160" y="770" text-anchor="middle" fill="#888" font-size="9">tmp.{pid} &#8594; rename &#8212; crash-safe</text>
+
+  <rect x="290" y="728" width="220" height="55" rx="6" fill="#1e2130" stroke="#c084fc" stroke-width="0.6" stroke-opacity="0.4"/>
+  <text x="400" y="748" text-anchor="middle" fill="#c084fc" font-size="11" font-weight="600">withFileLock()</text>
+  <text x="400" y="770" text-anchor="middle" fill="#888" font-size="9">In-process async mutex per path</text>
+
+  <text x="50" y="810" fill="#aaa" font-size="10">All file writes go through atomic primitives.</text>
+  <text x="50" y="826" fill="#aaa" font-size="10">Read-modify-write cycles serialized per file path.</text>
+  <text x="50" y="842" fill="#aaa" font-size="10">Errors logged to ~/.open-canvas/persistence-errors.log</text>
+
+  <!-- ═══════════ PERFORMANCE SECTION ═══════════ -->
+  <rect x="565" y="690" width="505" height="170" rx="10" fill="#12141f" stroke="#555" stroke-width="0.8" filter="url(#shadow)"/>
+  <text x="585" y="715" fill="#e8e8e8" font-size="13" font-weight="700">WHY IT PERFORMS WELL</text>
+
+  <rect x="585" y="730" width="145" height="40" rx="6" fill="#1e2130" stroke="#6bcb77" stroke-width="0.6" stroke-opacity="0.5"/>
+  <text x="657" y="746" text-anchor="middle" fill="#6bcb77" font-size="10" font-weight="600">Zero Query</text>
+  <text x="657" y="760" text-anchor="middle" fill="#888" font-size="9">No DB connections</text>
+
+  <rect x="745" y="730" width="145" height="40" rx="6" fill="#1e2130" stroke="#4d96ff" stroke-width="0.6" stroke-opacity="0.5"/>
+  <text x="817" y="746" text-anchor="middle" fill="#4d96ff" font-size="10" font-weight="600">O(1) Reads</text>
+  <text x="817" y="760" text-anchor="middle" fill="#888" font-size="9">Direct path, no index</text>
+
+  <rect x="905" y="730" width="145" height="40" rx="6" fill="#1e2130" stroke="#ffd93d" stroke-width="0.6" stroke-opacity="0.5"/>
+  <text x="977" y="746" text-anchor="middle" fill="#ffd93d" font-size="10" font-weight="600">LLM-Native</text>
+  <text x="977" y="760" text-anchor="middle" fill="#888" font-size="9">MD/YAML = agent-ready</text>
+
+  <rect x="585" y="782" width="145" height="40" rx="6" fill="#1e2130" stroke="#ff6b6b" stroke-width="0.6" stroke-opacity="0.5"/>
+  <text x="657" y="798" text-anchor="middle" fill="#ff6b6b" font-size="10" font-weight="600">Scoped</text>
+  <text x="657" y="812" text-anchor="middle" fill="#888" font-size="9">Per-project isolation</text>
+
+  <rect x="745" y="782" width="145" height="40" rx="6" fill="#1e2130" stroke="#c084fc" stroke-width="0.6" stroke-opacity="0.5"/>
+  <text x="817" y="798" text-anchor="middle" fill="#c084fc" font-size="10" font-weight="600">No Cold Start</text>
+  <text x="817" y="812" text-anchor="middle" fill="#888" font-size="9">Files always on disk</text>
+
+  <rect x="905" y="782" width="145" height="40" rx="6" fill="#1e2130" stroke="#6bcb77" stroke-width="0.6" stroke-opacity="0.5"/>
+  <text x="977" y="798" text-anchor="middle" fill="#6bcb77" font-size="10" font-weight="600">Self-Healing</text>
+  <text x="977" y="812" text-anchor="middle" fill="#888" font-size="9">Agents update own docs</text>
+
+  <text x="585" y="847" fill="#aaa" font-size="10">No database, no embeddings, no cold start. File reads are</text>
+  <text x="585" y="862" fill="#aaa" font-size="10">deterministic by path. Knowledge stays human-readable.</text>
+</svg>

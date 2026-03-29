@@ -3,6 +3,15 @@ import path from "path";
 import YAML from "yaml";
 import type { ValidationResult } from "./types";
 
+/** Atomic write: tmp file + rename. Crash-safe. */
+function atomicWrite(filePath: string, content: string): void {
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const tmp = `${filePath}.tmp.${process.pid}`;
+  fs.writeFileSync(tmp, content, "utf-8");
+  fs.renameSync(tmp, filePath);
+}
+
 /**
  * Abstract base class for YAML configuration management.
  * Encapsulates the read/write/merge pattern used across global and project configs.
@@ -39,10 +48,8 @@ export abstract class ConfigManager<T extends object> {
 
   /** Write a config object to disk as YAML. */
   write(config: T): void {
-    const dir = path.dirname(this.configPath);
-    fs.mkdirSync(dir, { recursive: true });
     const doc = new YAML.Document(config);
-    fs.writeFileSync(this.configPath, doc.toString(), "utf-8");
+    atomicWrite(this.configPath, doc.toString());
   }
 
   /** Read-modify-write pattern. */

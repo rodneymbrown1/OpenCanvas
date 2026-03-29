@@ -3,6 +3,15 @@ import path from "path";
 import type { SkillsScope, RunConfig } from "./types";
 import { SHARED_DATA_DIR } from "@/lib/globalConfig";
 
+/** Atomic write: tmp file + rename. Crash-safe. */
+function atomicWrite(filePath: string, content: string): void {
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const tmp = `${filePath}.tmp.${process.pid}`;
+  fs.writeFileSync(tmp, content, "utf-8");
+  fs.renameSync(tmp, filePath);
+}
+
 const PROJECT_DIR_NAME = ".open-canvas";
 const SKILLS_FILENAME = "skills.md";
 const PROJECT_DOC_FILENAME = "PROJECT.md";
@@ -122,8 +131,7 @@ export class SkillsManager {
   }
 
   writeSkills(content: string): void {
-    fs.mkdirSync(this.basePath, { recursive: true });
-    fs.writeFileSync(this.skillsPath, content, "utf-8");
+    atomicWrite(this.skillsPath, content);
   }
 
   /** Append a section to skills.md under a heading. Creates the heading if it doesn't exist. */
@@ -172,8 +180,7 @@ export class SkillsManager {
 
   writeProjectDoc(content: string): void {
     if (this.scope === "global") return;
-    fs.mkdirSync(this.basePath, { recursive: true });
-    fs.writeFileSync(this.projectDocPath, content, "utf-8");
+    atomicWrite(this.projectDocPath, content);
   }
 
   projectDocExists(): boolean {
@@ -199,9 +206,7 @@ export class SkillsManager {
   }
 
   writeGlobalData(content: string): void {
-    const dir = path.dirname(this.globalDataPath);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(this.globalDataPath, content, "utf-8");
+    atomicWrite(this.globalDataPath, content);
   }
 
   globalDataExists(): boolean {

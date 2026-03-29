@@ -85,7 +85,7 @@ export function CalendarEventForm({ onSubmit, onCancel, initialStart, initialEnd
     const common = {
       title,
       startTime: new Date(startTime).toISOString(),
-      endTime: endTime ? new Date(endTime).toISOString() : undefined,
+      endTime: !isAgentEvent && endTime ? new Date(endTime).toISOString() : undefined,
       allDay,
       recurrence: recurrence || undefined,
       source: { agent: "user" as const },
@@ -254,9 +254,11 @@ export function CalendarEventForm({ onSubmit, onCancel, initialStart, initialEnd
           </label>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className={`grid ${isAgentEvent ? "grid-cols-1" : "grid-cols-2"} gap-3`}>
           <div>
-            <label className="text-xs text-[var(--text-muted)] mb-1 block">Start</label>
+            <label className="text-xs text-[var(--text-muted)] mb-1 block">
+              {isAgentEvent ? "Run at" : "Start"}
+            </label>
             <input
               type="datetime-local"
               value={startTime}
@@ -265,15 +267,17 @@ export function CalendarEventForm({ onSubmit, onCancel, initialStart, initialEnd
               required
             />
           </div>
-          <div>
-            <label className="text-xs text-[var(--text-muted)] mb-1 block">End</label>
-            <input
-              type="datetime-local"
-              value={endTime}
-              onChange={(e) => setEndTime(e.target.value)}
-              className={inputClass}
-            />
-          </div>
+          {!isAgentEvent && (
+            <div>
+              <label className="text-xs text-[var(--text-muted)] mb-1 block">End</label>
+              <input
+                type="datetime-local"
+                value={endTime}
+                onChange={(e) => setEndTime(e.target.value)}
+                className={inputClass}
+              />
+            </div>
+          )}
         </div>
 
         <div>

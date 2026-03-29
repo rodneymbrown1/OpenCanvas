@@ -28,6 +28,7 @@ const CATEGORIES = [
   "config",    // Config read/write
   "voice",     // Voice routing / recording
   "git",       // Git repository operations
+  "calendar",  // Calendar connection & sync operations
 ];
 
 // ── Verbose check ───────────────────────────────────────────────────────────
@@ -107,4 +108,50 @@ export function logError(category, message, ...data) {
 /** Check if verbose logging is active right now. */
 export function isVerboseEnabled() {
   return isVerbose();
+}
+
+// ── Persistence error logging ──────────────────────────────────────────────
+
+import fs from "fs";
+import path from "path";
+
+const HOME = process.env.HOME || process.env.USERPROFILE || "/tmp";
+const PERSISTENCE_LOG_PATH = path.join(HOME, ".open-canvas", "persistence-errors.log");
+const MAX_LOG_LINES = 500;
+
+/**
+ * Log a persistence error. Always logs to console AND appends to
+ * ~/.open-canvas/persistence-errors.log (ring buffer, last 500 entries).
+ *
+ * @param {"read"|"write"|"delete"} operation
+ * @param {string} filePath
+ * @param {Error|string} error
+ */
+export function logPersistenceError(operation, filePath, error) {
+  const msg = error instanceof Error ? error.message : String(error);
+  const entry = `[${new Date().toISOString()}] ${operation.toUpperCase()} ${filePath}: ${msg}`;
+
+  // Always log to stderr
+  console.error(`[OC:PERSIST]`, entry);
+
+  // Append to ring-buffer log file
+  try {
+    const dir = path.dirname(PERSISTENCE_LOG_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+    let lines = [];
+    if (fs.existsSync(PERSISTENCE_LOG_PATH)) {
+      lines = fs.readFileSync(PERSISTENCE_LOG_PATH, "utf-8").split("\n").filter(Boolean);
+    }
+    lines.push(entry);
+
+    // Keep only the last MAX_LOG_LINES entries
+    if (lines.length > MAX_LOG_LINES) {
+      lines = lines.slice(lines.length - MAX_LOG_LINES);
+    }
+
+    fs.writeFileSync(PERSISTENCE_LOG_PATH, lines.join("\n") + "\n", "utf-8");
+  } catch {
+    // If we can't write the log file, the console.error above is our fallback
+  }
 }

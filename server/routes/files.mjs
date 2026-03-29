@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import { execFileSync, execFile, spawn } from "child_process";
 import { readConfig } from "../../src/lib/config.js";
+import { atomicWriteSync, atomicWriteBuffer } from "../lib/safe-write.mjs";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -250,7 +251,7 @@ async function handleCreateFile(req, res) {
     if (type === "directory") {
       fs.mkdirSync(filePath, { recursive: true });
     } else {
-      fs.writeFileSync(filePath, "", "utf-8");
+      atomicWriteSync(filePath, "");
     }
     json(res, { path: filePath, created: true });
   } catch (err) {
@@ -281,7 +282,7 @@ async function handleWriteFile(req, res) {
       return json(res, { error: "Cannot write to a directory" }, 400);
     }
 
-    fs.writeFileSync(filePath, content, "utf-8");
+    atomicWriteSync(filePath, content);
     json(res, { path: filePath, written: true });
   } catch (err) {
     json(res, { error: String(err) }, 500);
@@ -377,8 +378,7 @@ async function handleUploadFile(req, res) {
       const relPath = relativePaths[i] || file.filename;
       const sanitized = relPath.replace(/\.\.\//g, "").replace(/^\//g, "");
       const filePath = path.join(targetDir, sanitized);
-      fs.mkdirSync(path.dirname(filePath), { recursive: true });
-      fs.writeFileSync(filePath, file.data);
+      atomicWriteBuffer(filePath, file.data);
       saved.push(filePath);
     }
 

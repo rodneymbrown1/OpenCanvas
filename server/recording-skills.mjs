@@ -15,6 +15,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { log, logWarn } from "./logger.mjs";
+import { atomicWriteSync } from "./lib/safe-write.mjs";
 
 const HOME = process.env.HOME || process.env.USERPROFILE || "/tmp";
 const OC_HOME = path.join(HOME, ".open-canvas");
@@ -466,7 +467,7 @@ export function ensureVoiceSkills() {
   for (const [name, content] of Object.entries(DEFAULT_VOICE_SKILLS)) {
     const filePath = path.join(SKILLS_DIR, `${name}.md`);
     if (!fs.existsSync(filePath)) {
-      fs.writeFileSync(filePath, content, "utf-8");
+      atomicWriteSync(filePath, content);
       created++;
       log("skill", `   created: ${name}.md (${content.length} bytes)`);
     } else {

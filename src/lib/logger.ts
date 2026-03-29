@@ -20,7 +20,8 @@ type LogCategory =
   | "hydration"
   | "session"
   | "project"
-  | "git";
+  | "git"
+  | "calendar";
 
 const CATEGORY_COLORS: Record<LogCategory, string> = {
   page: "#4ade80",      // green
@@ -32,6 +33,7 @@ const CATEGORY_COLORS: Record<LogCategory, string> = {
   session: "#fb923c",   // orange
   project: "#34d399",   // emerald
   git: "#f472b6",       // pink
+  calendar: "#06b6d4",  // cyan
 };
 
 function isVerbose(): boolean {
@@ -123,6 +125,8 @@ export const logger = {
   project: (message: string, ...data: unknown[]) => log("project", message, ...data),
   /** Log git operations */
   git: (message: string, ...data: unknown[]) => log("git", message, ...data),
+  /** Log calendar connection & sync operations */
+  calendar: (message: string, ...data: unknown[]) => log("calendar", message, ...data),
 
   /** Warnings (only when verbose) */
   warn: (category: LogCategory, message: string, ...data: unknown[]) =>

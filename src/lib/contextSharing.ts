@@ -2,6 +2,15 @@ import fs from "fs";
 import path from "path";
 import { execSync } from "child_process";
 
+/** Atomic write: tmp file + rename. Crash-safe. */
+function atomicWrite(filePath: string, content: string): void {
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const tmp = `${filePath}.tmp.${process.pid}`;
+  fs.writeFileSync(tmp, content, "utf-8");
+  fs.renameSync(tmp, filePath);
+}
+
 const HANDOFF_DIR = ".open-canvas";
 const HANDOFF_FILE = "AGENT_HANDOFF.md";
 
@@ -136,7 +145,7 @@ export async function generateContextHandoff(
   // Write the handoff file
   const content = sections.join("\n");
   const handoffPath = path.join(handoffDir, HANDOFF_FILE);
-  fs.writeFileSync(handoffPath, content, "utf-8");
+  atomicWrite(handoffPath, content);
 
   return handoffPath;
 }

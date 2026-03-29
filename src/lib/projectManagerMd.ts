@@ -7,6 +7,15 @@ import fs from "fs";
 import path from "path";
 import { OC_HOME } from "./globalConfig";
 
+/** Atomic write: tmp file + rename. Crash-safe. */
+function atomicWrite(filePath: string, content: string): void {
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const tmp = `${filePath}.tmp.${process.pid}`;
+  fs.writeFileSync(tmp, content, "utf-8");
+  fs.renameSync(tmp, filePath);
+}
+
 export const PROJECT_MANAGER_MD_PATH = path.join(OC_HOME, "PROJECT_MANAGER.md");
 
 const SEED_CONTENT = `# Project Manager Agent Context
@@ -35,6 +44,6 @@ You are the Project Manager for Open Canvas, coordinating across all registered 
 export function ensureProjectManagerMd(): void {
   if (!fs.existsSync(PROJECT_MANAGER_MD_PATH)) {
     fs.mkdirSync(path.dirname(PROJECT_MANAGER_MD_PATH), { recursive: true });
-    fs.writeFileSync(PROJECT_MANAGER_MD_PATH, SEED_CONTENT, "utf-8");
+    atomicWrite(PROJECT_MANAGER_MD_PATH, SEED_CONTENT);
   }
 }

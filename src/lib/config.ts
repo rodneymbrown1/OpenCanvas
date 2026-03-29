@@ -2,6 +2,15 @@ import fs from "fs";
 import path from "path";
 import YAML from "yaml";
 
+/** Atomic write: tmp file + rename. Crash-safe. */
+function atomicWrite(filePath: string, content: string): void {
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const tmp = `${filePath}.tmp.${process.pid}`;
+  fs.writeFileSync(tmp, content, "utf-8");
+  fs.renameSync(tmp, filePath);
+}
+
 export interface AgentPermissions {
   read: boolean;
   write: boolean;
@@ -142,9 +151,8 @@ export function readConfig(): OpenCanvasConfig {
  * Only user overrides and runtime state are persisted — never in the repo.
  */
 export function writeConfig(config: OpenCanvasConfig): void {
-  fs.mkdirSync(OC_HOME, { recursive: true });
   const doc = new YAML.Document(config);
-  fs.writeFileSync(APP_CONFIG_CACHE_PATH, doc.toString(), "utf-8");
+  atomicWrite(APP_CONFIG_CACHE_PATH, doc.toString());
   _configCache = null;
   _configMtime = 0;
 }
@@ -188,12 +196,12 @@ export function readProjectConfigRaw(workDir: string): string {
 export function writeProjectConfig(workDir: string, config: Partial<OpenCanvasConfig>): void {
   const p = projectConfigPath(workDir);
   const doc = new YAML.Document(config);
-  fs.writeFileSync(p, doc.toString(), "utf-8");
+  atomicWrite(p, doc.toString());
 }
 
 export function writeProjectConfigRaw(workDir: string, content: string): void {
   const p = projectConfigPath(workDir);
-  fs.writeFileSync(p, content, "utf-8");
+  atomicWrite(p, content);
 }
 
 export function updateProjectConfig(

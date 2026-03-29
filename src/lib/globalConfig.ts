@@ -2,6 +2,15 @@ import fs from "fs";
 import path from "path";
 import YAML from "yaml";
 
+/** Atomic write: tmp file + rename. Crash-safe. */
+function atomicWrite(filePath: string, content: string): void {
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const tmp = `${filePath}.tmp.${process.pid}`;
+  fs.writeFileSync(tmp, content, "utf-8");
+  fs.renameSync(tmp, filePath);
+}
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export interface ProjectEntry {
@@ -96,7 +105,7 @@ export function setupGlobalConfig(customHome?: string): GlobalConfig {
   // Write config if it doesn't exist
   if (!fs.existsSync(configPath)) {
     const doc = new YAML.Document(config);
-    fs.writeFileSync(configPath, doc.toString(), "utf-8");
+    atomicWrite(configPath, doc.toString());
   }
 
   return readGlobalConfig(home);
@@ -127,9 +136,8 @@ export function readGlobalConfig(home?: string): GlobalConfig {
 export function writeGlobalConfig(config: GlobalConfig, home?: string): void {
   const h = home || config.open_canvas_home || OC_HOME;
   const configPath = path.join(h, "global.yaml");
-  fs.mkdirSync(h, { recursive: true });
   const doc = new YAML.Document(config);
-  fs.writeFileSync(configPath, doc.toString(), "utf-8");
+  atomicWrite(configPath, doc.toString());
 }
 
 // ── Project Registry ─────────────────────────────────────────────────────────

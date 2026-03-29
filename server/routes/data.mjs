@@ -8,6 +8,7 @@ import {
   ensureSharedDataDirs,
   linkGlobalToProject,
 } from "../../src/lib/globalConfig.js";
+import { atomicWriteBuffer } from "../lib/safe-write.mjs";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -254,8 +255,7 @@ async function handleDataUpload(req, res) {
       const relPath = relativePaths[i] || file.filename;
       const sanitized = relPath.replace(/\.\.\//g, "").replace(/^\//g, "");
       const filePath = path.join(rawDir, sanitized);
-      fs.mkdirSync(path.dirname(filePath), { recursive: true });
-      fs.writeFileSync(filePath, file.data);
+      atomicWriteBuffer(filePath, file.data);
       saved.push(filePath);
     }
 

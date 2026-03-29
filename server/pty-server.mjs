@@ -1395,8 +1395,15 @@ httpServer.listen(PORT, () => {
     session.role = "cron";
     if (opts.eventId) session.eventId = opts.eventId;
 
-    const agentCmd = getAgentArgs(opts.agent);
-    const ptyProcess = pty.spawn(agentCmd.shell, agentCmd.args, {
+    // Cron sessions always skip permissions — no user to answer prompts
+    const agentDef = AGENT_COMMANDS[opts.agent] || AGENT_COMMANDS.shell;
+    const skipFlag = DANGEROUS_EDIT_FLAGS[opts.agent] || "";
+    const cronArgs = agentDef.args.map((a) =>
+      a === opts.agent && skipFlag ? `${opts.agent} ${skipFlag}` : a
+    );
+    log("cron", `spawn command: ${agentDef.shell} ${cronArgs.join(" ")} in ${opts.cwd}`);
+
+    const ptyProcess = pty.spawn(agentDef.shell, cronArgs, {
       name: "xterm-256color",
       cols: 120,
       rows: 30,
@@ -1446,36 +1453,33 @@ httpServer.listen(PORT, () => {
       }, opts.timeout);
     }
 
-    // ── Gap 6: Wait for agent ready signal before sending prompt ──
-    // Instead of a hardcoded 3s delay, detect when the agent is ready
-    // by watching for common ready indicators in the output
-    const READY_PATTERNS = [
-      /\$\s*$/,          // shell prompt
-      />\s*$/,           // claude/generic prompt
-      /❯\s*$/,           // zsh prompt
-      /waiting/i,        // "waiting for input"
-      /ready/i,          // "ready"
-      /\?\s*$/,          // question prompt
-    ];
-    const MAX_READY_WAIT_MS = 15000; // 15s max wait for ready signal
+    // Wait for agent ready signal, then inject prompt via bracketed paste
+    // (matches the working voice-job and app-start pattern)
+    const readyPattern = /[>❯]\s*$/;
+    const MAX_READY_WAIT_MS = 15000;
     let readyTimeout = null;
 
-    function sendPromptWhenReady() {
+    function sendCronPrompt() {
       if (promptSent || !opts.prompt) return;
       promptSent = true;
       if (readyTimeout) clearTimeout(readyTimeout);
-      // Small buffer after detecting ready to avoid racing
+      // Delay to let startup messages (e.g. installer notices) clear
       setTimeout(() => {
-        ptyProcess.write(opts.prompt + "\r");
-        log("cron", `prompt delivered to session ${session.id}`);
-      }, 300);
+        log("cron", `injecting prompt to session=${session.id} (${opts.prompt.length} bytes via bracketed paste)`);
+        ptyProcess.write(`\x1b[200~${opts.prompt}\x1b[201~`);
+        // Send Enter separately so terminal treats it as a keypress, not pasted text
+        setTimeout(() => {
+          ptyProcess.write("\r");
+          log("cron", `prompt submitted to session=${session.id}`);
+        }, 200);
+      }, 1500);
     }
 
     // Fallback: if we don't detect a ready signal in time, send anyway
     readyTimeout = setTimeout(() => {
       if (!promptSent) {
-        logWarn("cron", `ready-wait timeout, sending prompt to ${session.id}`);
-        sendPromptWhenReady();
+        logWarn("cron", `ready-wait timeout after ${MAX_READY_WAIT_MS}ms, sending prompt to ${session.id}`);
+        sendCronPrompt();
       }
     }, MAX_READY_WAIT_MS);
 
@@ -1490,9 +1494,16 @@ httpServer.listen(PORT, () => {
         }
       }
 
-      // Check for ready signal to send prompt
-      if (!promptSent && READY_PATTERNS.some((p) => p.test(clean))) {
-        sendPromptWhenReady();
+      // Check for ready signal line-by-line (not whole chunk)
+      if (!promptSent) {
+        const lines = clean.split("\n").filter((l) => l.trim());
+        for (const line of lines) {
+          if (readyPattern.test(line.trim())) {
+            log("cron", `agent ready detected for session=${session.id}`);
+            sendCronPrompt();
+            break;
+          }
+        }
       }
 
       // Buffer for reconnection

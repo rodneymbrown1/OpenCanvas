@@ -4,6 +4,15 @@ import YAML from "yaml";
 import { nanoid } from "nanoid";
 import { OC_HOME, SHARED_DATA_DIR } from "./globalConfig";
 
+/** Atomic write: tmp file + rename. Crash-safe. */
+function atomicWrite(filePath: string, content: string): void {
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const tmp = `${filePath}.tmp.${process.pid}`;
+  fs.writeFileSync(tmp, content, "utf-8");
+  fs.renameSync(tmp, filePath);
+}
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export type AgentType = "claude" | "codex" | "gemini" | "user";
@@ -314,46 +323,46 @@ export function ensureCalendarDir(): void {
 
   if (!fs.existsSync(CALENDAR_EVENTS_PATH)) {
     const doc = new YAML.Document({ events: [] });
-    fs.writeFileSync(CALENDAR_EVENTS_PATH, doc.toString(), "utf-8");
+    atomicWrite(CALENDAR_EVENTS_PATH, doc.toString());
   }
 
   if (!fs.existsSync(CRON_STATE_PATH)) {
     const doc = new YAML.Document({ jobs: [] });
-    fs.writeFileSync(CRON_STATE_PATH, doc.toString(), "utf-8");
+    atomicWrite(CRON_STATE_PATH, doc.toString());
   }
 
   if (!fs.existsSync(NOTIFICATIONS_PATH)) {
     const doc = new YAML.Document({ notifications: [] });
-    fs.writeFileSync(NOTIFICATIONS_PATH, doc.toString(), "utf-8");
+    atomicWrite(NOTIFICATIONS_PATH, doc.toString());
   }
 
   if (!fs.existsSync(HISTORY_PATH)) {
     const doc = new YAML.Document({ events: [] });
-    fs.writeFileSync(HISTORY_PATH, doc.toString(), "utf-8");
+    atomicWrite(HISTORY_PATH, doc.toString());
   }
 
   if (!fs.existsSync(CALENDAR_MD_PATH)) {
-    fs.writeFileSync(CALENDAR_MD_PATH, SEED_CALENDAR_MD, "utf-8");
+    atomicWrite(CALENDAR_MD_PATH, SEED_CALENDAR_MD);
   }
 
   if (!fs.existsSync(CALENDAR_SKILLS_PATH)) {
-    fs.writeFileSync(CALENDAR_SKILLS_PATH, SEED_SKILLS_MD, "utf-8");
+    atomicWrite(CALENDAR_SKILLS_PATH, SEED_SKILLS_MD);
   }
 
   // Seed agent skill document
   if (!fs.existsSync(AGENT_SKILL_PATH)) {
-    fs.writeFileSync(AGENT_SKILL_PATH, SEED_AGENT_SKILL_MD, "utf-8");
+    atomicWrite(AGENT_SKILL_PATH, SEED_AGENT_SKILL_MD);
   }
 
   // Seed project-manager docs in shared-data
   fs.mkdirSync(SHARED_DATA_DIR, { recursive: true });
 
   if (!fs.existsSync(PM_SKILLS_PATH)) {
-    fs.writeFileSync(PM_SKILLS_PATH, SEED_PM_SKILLS_MD, "utf-8");
+    atomicWrite(PM_SKILLS_PATH, SEED_PM_SKILLS_MD);
   }
 
   if (!fs.existsSync(PM_INDEX_PATH)) {
-    fs.writeFileSync(PM_INDEX_PATH, SEED_PM_INDEX_MD, "utf-8");
+    atomicWrite(PM_INDEX_PATH, SEED_PM_INDEX_MD);
   }
 }
 
@@ -373,7 +382,7 @@ export function readEvents(): CalendarEvent[] {
 function writeEvents(events: CalendarEvent[]): void {
   ensureCalendarDir();
   const doc = new YAML.Document({ events });
-  fs.writeFileSync(CALENDAR_EVENTS_PATH, doc.toString(), "utf-8");
+  atomicWrite(CALENDAR_EVENTS_PATH, doc.toString());
 }
 
 export function addEvent(
@@ -456,7 +465,7 @@ export function readNotifications(): CalendarNotification[] {
 function writeNotifications(notifications: CalendarNotification[]): void {
   ensureCalendarDir();
   const doc = new YAML.Document({ notifications });
-  fs.writeFileSync(NOTIFICATIONS_PATH, doc.toString(), "utf-8");
+  atomicWrite(NOTIFICATIONS_PATH, doc.toString());
 }
 
 export function addNotification(
@@ -507,7 +516,7 @@ export function readCronState(): CronJobState[] {
 export function writeCronState(jobs: CronJobState[]): void {
   ensureCalendarDir();
   const doc = new YAML.Document({ jobs });
-  fs.writeFileSync(CRON_STATE_PATH, doc.toString(), "utf-8");
+  atomicWrite(CRON_STATE_PATH, doc.toString());
 }
 
 export function updateCronJob(
@@ -543,5 +552,5 @@ export function archiveEvent(event: CalendarEvent): void {
   }
   history.push(event);
   const doc = new YAML.Document({ events: history });
-  fs.writeFileSync(HISTORY_PATH, doc.toString(), "utf-8");
+  atomicWrite(HISTORY_PATH, doc.toString());
 }

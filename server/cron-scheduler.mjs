@@ -24,8 +24,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { parse, stringify } from "yaml";
 import { log, logWarn, logError } from "./logger.mjs";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { atomicWriteSync } from "./lib/safe-write.mjs";
 
 const HOME = process.env.HOME || process.env.USERPROFILE || "/tmp";
 const OC_HOME = path.join(HOME, ".open-canvas");
@@ -81,8 +82,7 @@ function readYaml(filePath) {
 }
 
 function writeYaml(filePath, data) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, stringify(data), "utf-8");
+  atomicWriteSync(filePath, stringify(data));
 }
 
 function readEvents() {
@@ -202,10 +202,17 @@ function isCommandAllowed(payload) {
 
 function isAgentAvailable(agentName) {
   try {
-    const { execSync } = require("node:child_process");
-    const result = execSync(`which ${agentName} 2>/dev/null`, { timeout: 3000, encoding: "utf-8" });
-    return result.trim().length > 0;
+    // Use login shell (-l) to pick up PATH from user's profile (e.g. native Claude installer)
+    const result = execFileSync("/bin/zsh", ["-l", "-c", `which ${agentName}`], {
+      timeout: 5000,
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const found = result.trim().length > 0;
+    log("cron", `agent check: ${agentName} → ${found ? result.trim() : "not found"}`);
+    return found;
   } catch {
+    log("cron", `agent check: ${agentName} → not found (which failed)`);
     return false;
   }
 }
@@ -249,6 +256,7 @@ function executeJob(event) {
 
       // ── Gap 5: Acquire project lock ──
       const projectPath = action.projectPath || OC_HOME;
+      log("cron", `prompt task: agent=${agentName} project=${projectPath} payload="${action.payload.substring(0, 100)}"`);
       if (!acquireProjectLock(projectPath, event.id)) {
         const errMsg = `Project "${projectPath}" is locked by another running task. Skipping.`;
         addNotification(event.id, `Skipped: ${event.title}`, errMsg);
@@ -285,6 +293,7 @@ function executeJob(event) {
         ].filter(Boolean);
 
         let prompt = `${contextLines.join("\n")}\n\n${action.payload}`;
+        log("cron", `enriched prompt: ${prompt.length} bytes (context=${contextLines.length} lines)`);
 
         // Enrich with Open Canvas agent skill when no explicit project path
         const agentSkillPath = path.join(CALENDAR_DIR, "open-canvas-agent-skill.md");
@@ -299,7 +308,7 @@ function executeJob(event) {
           }
         }
 
-        // ── Gap 3 + 4 + 6: Spawn with exit tracking, timeout, and ready detection ──
+        log("cron", `spawning agent session: event=${event.id} prompt=${prompt.length} bytes timeout=${AGENT_SESSION_TIMEOUT_MS / 60000}m`);
         spawnSessionCallback({
           agent: agentName,
           cwd: projectPath,
@@ -307,6 +316,7 @@ function executeJob(event) {
           eventId: event.id,
           timeout: AGENT_SESSION_TIMEOUT_MS,
           onComplete: (result) => {
+            log("cron", `session completed: event=${event.id} exitCode=${result.exitCode} timedOut=${result.timedOut}`);
             // Release project lock
             releaseProjectLock(projectPath, event.id);
             activeAgentSessions.delete(event.id);

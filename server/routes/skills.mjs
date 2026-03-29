@@ -3,6 +3,7 @@
 
 import { SkillsManager } from "../../src/lib/core/SkillsManager.js";
 import { SHARED_DATA_DIR } from "../../src/lib/globalConfig.js";
+import { withFileLock } from "../lib/safe-write.mjs";
 
 function parseBody(req) {
   return new Promise((resolve, reject) => {
@@ -109,10 +110,12 @@ export async function handle(req, res, url) {
       return true;
     }
 
-    // Write global data
+    // Write global data (locked to prevent concurrent clobber)
     if (type === "global-data") {
       const manager = new SkillsManager("global", SHARED_DATA_DIR);
-      manager.writeGlobalData(body.content || "");
+      await withFileLock(manager.globalDataPath, () => {
+        manager.writeGlobalData(body.content || "");
+      });
       jsonResponse(res, { success: true, path: manager.globalDataPath });
       return true;
     }
@@ -147,7 +150,9 @@ export async function handle(req, res, url) {
       const manager = new SkillsManager("project", cwd);
       manager.ensureFiles();
       const runSection = SkillsManager.generateRunSection(runConfig);
-      manager.appendSection("Running the App", runSection);
+      await withFileLock(manager.skillsPath, () => {
+        manager.appendSection("Running the App", runSection);
+      });
       jsonResponse(res, { success: true, path: manager.skillsPath });
       return true;
     }
@@ -171,7 +176,9 @@ export async function handle(req, res, url) {
         );
         return true;
       }
-      manager.appendSection(body.heading, body.content);
+      await withFileLock(manager.skillsPath, () => {
+        manager.appendSection(body.heading, body.content);
+      });
       jsonResponse(res, { success: true, path: manager.skillsPath });
       return true;
     }

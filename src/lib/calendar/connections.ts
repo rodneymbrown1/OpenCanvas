@@ -5,6 +5,15 @@ import { nanoid } from "nanoid";
 import { CALENDAR_DIR, ensureCalendarDir } from "../calendarConfig.js";
 import type { ConnectionConfig, SyncDirection, ConflictStrategy } from "./providers/CalendarProviderInterface.js";
 
+/** Atomic write: tmp file + rename. Crash-safe. */
+function atomicWrite(filePath: string, content: string): void {
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const tmp = `${filePath}.tmp.${process.pid}`;
+  fs.writeFileSync(tmp, content, "utf-8");
+  fs.renameSync(tmp, filePath);
+}
+
 const CONNECTIONS_PATH = path.join(CALENDAR_DIR, "connections.yaml");
 
 interface ConnectionsFile {
@@ -28,7 +37,7 @@ function readConnectionsFile(): ConnectionsFile {
 function writeConnectionsFile(data: ConnectionsFile): void {
   ensureCalendarDir();
   const doc = new YAML.Document(data);
-  fs.writeFileSync(CONNECTIONS_PATH, doc.toString(), "utf-8");
+  atomicWrite(CONNECTIONS_PATH, doc.toString());
 }
 
 export function listConnections(): ConnectionConfig[] {

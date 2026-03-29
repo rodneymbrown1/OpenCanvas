@@ -15,6 +15,8 @@ import { RunConfigManager } from "../../src/lib/core/RunConfigManager.js";
 import { SkillsManager } from "../../src/lib/core/SkillsManager.js";
 import fs from "fs";
 import path from "path";
+import { atomicWriteSync, withFileLock } from "../lib/safe-write.mjs";
+import { logPersistenceError } from "../logger.mjs";
 
 function parseBody(req) {
   return new Promise((resolve, reject) => {
@@ -99,7 +101,8 @@ export function handle(req, res, url) {
 
           writeGlobalConfig(globalConfig);
           json(res, { ok: true, keys: Object.keys(globalConfig.api_keys) });
-        } catch {
+        } catch (err) {
+          logPersistenceError("write", "global.yaml", err);
           json(res, { error: "Failed to update API keys" }, 500);
         }
       })();
@@ -148,29 +151,37 @@ export function handle(req, res, url) {
 
           // Route api_keys to global config (root scope)
           if (updates.api_keys) {
-            const globalConfig = readGlobalConfig();
-            globalConfig.api_keys = { ...globalConfig.api_keys, ...updates.api_keys };
-            writeGlobalConfig(globalConfig);
+            await withFileLock(APP_CONFIG_PATH, () => {
+              const globalConfig = readGlobalConfig();
+              globalConfig.api_keys = { ...globalConfig.api_keys, ...updates.api_keys };
+              writeGlobalConfig(globalConfig);
+            });
             delete updates.api_keys;
           }
 
           // Apply remaining updates to project/app config
           if (Object.keys(updates).length > 0) {
-            if (workDir) {
-              const updated = updateProjectConfig(workDir, (config) =>
-                deepMerge(config, updates)
-              );
-              json(res, updated);
-            } else {
-              const updated = updateConfig((config) =>
-                deepMerge(config, updates)
-              );
-              json(res, updated);
-            }
+            const configPath = workDir
+              ? path.join(workDir, "open-canvas.yaml")
+              : APP_CONFIG_PATH;
+            await withFileLock(configPath, () => {
+              if (workDir) {
+                const updated = updateProjectConfig(workDir, (config) =>
+                  deepMerge(config, updates)
+                );
+                json(res, updated);
+              } else {
+                const updated = updateConfig((config) =>
+                  deepMerge(config, updates)
+                );
+                json(res, updated);
+              }
+            });
           } else {
             json(res, { ok: true });
           }
-        } catch {
+        } catch (err) {
+          logPersistenceError("write", APP_CONFIG_PATH, err);
           json(res, { error: "Failed to update config" }, 500);
         }
       })();
@@ -216,10 +227,11 @@ export function handle(req, res, url) {
           if (workDir) {
             writeProjectConfigRaw(workDir, content);
           } else {
-            fs.writeFileSync(APP_CONFIG_PATH, content, "utf-8");
+            atomicWriteSync(APP_CONFIG_PATH, content);
           }
           json(res, { ok: true });
-        } catch {
+        } catch (err) {
+          logPersistenceError("write", workDir ? `${workDir}/open-canvas.yaml` : APP_CONFIG_PATH, err);
           json(res, { error: "Failed to save" }, 500);
         }
       })();

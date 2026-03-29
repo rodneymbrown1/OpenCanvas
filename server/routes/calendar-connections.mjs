@@ -1,6 +1,10 @@
 // server/routes/calendar-connections.mjs — Calendar connection & sync API routes
+// Uses gcloud CLI for browser-based OAuth (Application Default Credentials)
 
-import http from "http";
+import { execFile, spawn } from "child_process";
+import fs from "fs";
+import path from "path";
+import os from "os";
 import {
   listConnections,
   addConnection,
@@ -10,7 +14,15 @@ import {
 } from "../../src/lib/calendar/connections.js";
 import { getProvider, listProviders } from "../../src/lib/calendar/providers/index.js";
 import { syncConnection, pushEvent } from "../../src/lib/calendar/sync/CalendarSyncEngine.js";
-import { readGlobalConfig } from "../../src/lib/globalConfig.js";
+import { log, logWarn, logError } from "../logger.mjs";
+
+const CAT = "calendar";
+
+// Path where gcloud stores ADC credentials
+const ADC_PATH = path.join(os.homedir(), ".config", "gcloud", "application_default_credentials.json");
+
+const CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar";
+const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 
 function parseBody(req) {
   return new Promise((resolve, reject) => {
@@ -28,90 +40,205 @@ function jsonResponse(res, data, status = 200) {
   res.end(JSON.stringify(data));
 }
 
-// Track active OAuth listeners
-const activeOAuthListeners = new Map();
+// ── gcloud helpers ─────────────────────────────────────────────────────────────
 
-function startOAuthListener(connectionId, provider, clientId, clientSecret) {
+/** Check if gcloud CLI is installed and return its path */
+function checkGcloud() {
+  return new Promise((resolve) => {
+    execFile("which", ["gcloud"], (err, stdout) => {
+      if (err) {
+        log(CAT, "gcloud CLI not found in PATH");
+        resolve(null);
+      } else {
+        const p = stdout.trim();
+        log(CAT, "gcloud CLI found at:", p);
+        resolve(p);
+      }
+    });
+  });
+}
+
+/** Attempt to install gcloud CLI via brew (macOS) */
+function installGcloud(sendEvent) {
   return new Promise((resolve, reject) => {
-    const server = http.createServer(async (req, res) => {
-      const url = new URL(req.url, `http://localhost`);
-      if (url.pathname === "/oauth/callback") {
-        const code = url.searchParams.get("code");
-        const error = url.searchParams.get("error");
+    log(CAT, "Attempting gcloud install via brew...");
+    sendEvent("progress", "Installing Google Cloud SDK via Homebrew...");
 
-        if (error) {
-          res.writeHead(200, { "Content-Type": "text/html" });
-          res.end("<html><body><h2>Authorization failed</h2><p>You can close this window.</p></body></html>");
-          server.close();
-          activeOAuthListeners.delete(connectionId);
-          reject(new Error(error));
-          return;
-        }
+    const child = spawn("brew", ["install", "--cask", "google-cloud-sdk"], {
+      timeout: 300000,
+      env: { ...process.env, HOMEBREW_NO_AUTO_UPDATE: "1" },
+    });
 
-        if (code) {
-          try {
-            const port = server.address().port;
-            const tokens = await provider.exchangeCode(
-              code,
-              clientId,
-              clientSecret,
-              `http://localhost:${port}/oauth/callback`
-            );
+    child.stdout.on("data", (chunk) => {
+      const lines = chunk.toString().split(/\r?\n/).filter(Boolean);
+      for (const line of lines) {
+        log(CAT, "[brew stdout]", line);
+        sendEvent("progress", line);
+      }
+    });
 
-            // Update the connection with tokens
-            updateConnection(connectionId, {
-              credentials: {
-                access_token: tokens.access_token,
-                refresh_token: tokens.refresh_token,
-                token_expiry: tokens.expiry_date,
-                client_id: clientId,
-                client_secret: clientSecret,
-              },
-            });
+    child.stderr.on("data", (chunk) => {
+      const lines = chunk.toString().split(/\r?\n/).filter(Boolean);
+      for (const line of lines) {
+        log(CAT, "[brew stderr]", line);
+        sendEvent("progress", line);
+      }
+    });
 
-            res.writeHead(200, { "Content-Type": "text/html" });
-            res.end(
-              "<html><body style='font-family:system-ui;text-align:center;padding:40px'>" +
-              "<h2 style='color:#22c55e'>Connected!</h2>" +
-              "<p>Google Calendar connected to Open Canvas. You can close this window.</p>" +
-              "</body></html>"
-            );
-
-            server.close();
-            activeOAuthListeners.delete(connectionId);
-            resolve(tokens);
-          } catch (err) {
-            res.writeHead(200, { "Content-Type": "text/html" });
-            res.end("<html><body><h2>Token exchange failed</h2><p>" + err.message + "</p></body></html>");
-            server.close();
-            activeOAuthListeners.delete(connectionId);
-            reject(err);
+    child.on("close", async (code) => {
+      if (code === 0) {
+        log(CAT, "gcloud install completed successfully");
+        sendEvent("progress", "Google Cloud SDK installed successfully.");
+        // After cask install, gcloud may be at a brew-managed path; re-check
+        const found = await checkGcloud();
+        if (found) {
+          resolve(found);
+        } else {
+          // Try common brew cask path
+          const brewPath = "/opt/homebrew/bin/gcloud";
+          const usrPath = "/usr/local/bin/gcloud";
+          const caskPath = "/opt/homebrew/share/google-cloud-sdk/bin/gcloud";
+          for (const p of [brewPath, usrPath, caskPath]) {
+            if (fs.existsSync(p)) {
+              log(CAT, "Found gcloud at fallback path:", p);
+              resolve(p);
+              return;
+            }
           }
+          logWarn(CAT, "gcloud installed but not found in expected paths");
+          reject(new Error("gcloud installed but not found in PATH. You may need to restart your terminal."));
+        }
+      } else {
+        logError(CAT, `brew install failed with exit code ${code}`);
+        reject(new Error(`Failed to install Google Cloud SDK (exit code ${code})`));
+      }
+    });
+
+    child.on("error", (err) => {
+      logError(CAT, "brew install spawn error:", err.message);
+      reject(err);
+    });
+  });
+}
+
+/** Read ADC credentials file */
+function readADC() {
+  try {
+    if (!fs.existsSync(ADC_PATH)) {
+      log(CAT, "ADC file not found at:", ADC_PATH);
+      return null;
+    }
+    const raw = fs.readFileSync(ADC_PATH, "utf-8");
+    const data = JSON.parse(raw);
+    log(CAT, "ADC file read successfully, type:", data.type);
+    return data;
+  } catch (err) {
+    logError(CAT, "Failed to read ADC file:", err.message);
+    return null;
+  }
+}
+
+/** Exchange ADC refresh_token for a fresh access_token */
+async function getAccessTokenFromADC(adc) {
+  log(CAT, "Exchanging ADC refresh_token for access_token...");
+  const res = await fetch(GOOGLE_TOKEN_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: adc.client_id,
+      client_secret: adc.client_secret,
+      refresh_token: adc.refresh_token,
+      grant_type: "refresh_token",
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    logError(CAT, "ADC token exchange failed:", errText);
+    throw new Error(`Token exchange failed: ${errText}`);
+  }
+
+  const data = await res.json();
+  log(CAT, "ADC access_token obtained, expires_in:", data.expires_in);
+  return {
+    access_token: data.access_token,
+    expiry_date: new Date(Date.now() + data.expires_in * 1000).toISOString(),
+  };
+}
+
+/** Run gcloud auth application-default login with SSE progress streaming */
+function runGcloudAuth(gcloudPath, sendEvent) {
+  return new Promise((resolve, reject) => {
+    log(CAT, "Starting gcloud auth application-default login...");
+    sendEvent("progress", "Opening browser for Google authentication...");
+
+    const child = spawn(
+      gcloudPath,
+      [
+        "auth", "application-default", "login",
+        "--scopes", CALENDAR_SCOPE,
+        "--no-launch-browser",
+      ],
+      {
+        timeout: 300000, // 5 min for user to complete browser flow
+        env: { ...process.env },
+      }
+    );
+
+    let allOutput = "";
+
+    child.stdout.on("data", (chunk) => {
+      const text = chunk.toString();
+      allOutput += text;
+      const lines = text.split(/\r?\n/).filter(Boolean);
+      for (const line of lines) {
+        log(CAT, "[gcloud stdout]", line);
+
+        // Detect the auth URL
+        const urlMatch = line.match(/(https:\/\/accounts\.google\.com\S+)/);
+        if (urlMatch) {
+          sendEvent("auth_url", urlMatch[1]);
+          sendEvent("progress", "Please complete authentication in your browser.");
+        } else {
+          sendEvent("progress", line);
         }
       }
     });
 
-    // Listen on random port
-    server.listen(0, "127.0.0.1", () => {
-      activeOAuthListeners.set(connectionId, server);
-      // Auto-close after 5 minutes
-      setTimeout(() => {
-        if (activeOAuthListeners.has(connectionId)) {
-          server.close();
-          activeOAuthListeners.delete(connectionId);
+    child.stderr.on("data", (chunk) => {
+      const text = chunk.toString();
+      allOutput += text;
+      const lines = text.split(/\r?\n/).filter(Boolean);
+      for (const line of lines) {
+        log(CAT, "[gcloud stderr]", line);
+
+        const urlMatch = line.match(/(https:\/\/accounts\.google\.com\S+)/);
+        if (urlMatch) {
+          sendEvent("auth_url", urlMatch[1]);
+          sendEvent("progress", "Please complete authentication in your browser.");
+        } else {
+          sendEvent("progress", line);
         }
-      }, 5 * 60 * 1000);
+      }
     });
 
-    server.on("error", reject);
+    child.on("close", (code) => {
+      log(CAT, `gcloud auth exited with code ${code}`);
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`gcloud auth failed (exit code ${code})`));
+      }
+    });
 
-    // Return the port via a callback
-    server.once("listening", () => {
-      const port = server.address().port;
-      resolve({ port, server });
+    child.on("error", (err) => {
+      logError(CAT, "gcloud auth spawn error:", err.message);
+      reject(err);
     });
   });
 }
+
+// ── Route handler ──────────────────────────────────────────────────────────────
 
 export async function handle(req, res, url) {
   const pathname = url.pathname;
@@ -119,17 +246,33 @@ export async function handle(req, res, url) {
 
   // ── GET /api/calendar/connections ──────────────────────────────────────
   if (pathname === "/api/calendar/connections" && method === "GET") {
+    log(CAT, "Listing calendar connections");
     const connections = listConnections();
-    // Mask sensitive credentials
     const safe = connections.map((c) => ({
       ...c,
       credentials: {
         has_access_token: !!c.credentials.access_token,
         has_refresh_token: !!c.credentials.refresh_token,
         token_expiry: c.credentials.token_expiry,
+        auth_method: c.credentials.auth_method || "manual",
       },
     }));
     jsonResponse(res, { connections: safe, providers: listProviders().map((p) => ({ id: p.id, name: p.name })) });
+    return true;
+  }
+
+  // ── GET /api/calendar/gcloud-status ───────────────────────────────────
+  if (pathname === "/api/calendar/gcloud-status" && method === "GET") {
+    log(CAT, "Checking gcloud status");
+    const gcloudPath = await checkGcloud();
+    const adc = readADC();
+    const hasValidADC = !!(adc && adc.client_id && adc.refresh_token);
+
+    jsonResponse(res, {
+      gcloudInstalled: !!gcloudPath,
+      hasADC: hasValidADC,
+      adcPath: ADC_PATH,
+    });
     return true;
   }
 
@@ -137,7 +280,7 @@ export async function handle(req, res, url) {
   if (pathname === "/api/calendar/connections" && method === "POST") {
     const body = await parseBody(req);
 
-    // Initiate OAuth flow
+    // ── Initiate gcloud-based OAuth flow (SSE streaming) ────────────────
     if (body.action === "initiate-oauth") {
       const providerId = body.provider;
       if (!providerId) {
@@ -145,50 +288,111 @@ export async function handle(req, res, url) {
         return true;
       }
 
-      const provider = getProvider(providerId);
-      if (!provider) {
-        jsonResponse(res, { error: `Provider ${providerId} not found` }, 400);
-        return true;
-      }
+      log(CAT, "Initiating gcloud OAuth flow for provider:", providerId);
 
-      // Read API keys from global config
-      const globalConfig = readGlobalConfig();
-      const clientId = globalConfig.api_keys?.google_calendar_client_id;
-      const clientSecret = globalConfig.api_keys?.google_calendar_client_secret;
-
-      if (!clientId || !clientSecret) {
-        jsonResponse(res, {
-          error: "Google Calendar credentials not configured",
-          hint: "Add google_calendar_client_id and google_calendar_client_secret in Settings > API Keys",
-        }, 400);
-        return true;
-      }
-
-      // Create a pending connection
-      const connection = addConnection(providerId, {
-        client_id: clientId,
-        client_secret: clientSecret,
+      // Switch to SSE streaming
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
       });
 
-      try {
-        // Start OAuth listener
-        const { port } = await startOAuthListener(connection.id, provider, clientId, clientSecret);
-        const authUrl = provider.getAuthUrl(clientId, clientSecret, port);
+      const sendEvent = (type, data) => {
+        try {
+          res.write(`data: ${JSON.stringify({ type, data })}\n\n`);
+        } catch {}
+      };
 
-        jsonResponse(res, {
-          connectionId: connection.id,
-          authUrl,
-          message: "Open the authUrl in your browser to authorize",
+      try {
+        // Step 1: Check gcloud installed
+        sendEvent("progress", "Checking for Google Cloud SDK...");
+        let gcloudPath = await checkGcloud();
+
+        if (!gcloudPath) {
+          sendEvent("progress", "Google Cloud SDK not found. Installing...");
+          log(CAT, "gcloud not found, attempting install");
+
+          // Check if brew is available
+          const brewInstalled = await new Promise((resolve) => {
+            execFile("which", ["brew"], (err) => resolve(!err));
+          });
+
+          if (!brewInstalled) {
+            logError(CAT, "Homebrew not available for gcloud install");
+            sendEvent("error", "Google Cloud SDK is not installed and Homebrew is not available. Install manually: https://cloud.google.com/sdk/docs/install");
+            res.end();
+            return true;
+          }
+
+          try {
+            gcloudPath = await installGcloud(sendEvent);
+          } catch (installErr) {
+            sendEvent("error", installErr.message);
+            res.end();
+            return true;
+          }
+        }
+
+        sendEvent("progress", "Google Cloud SDK is ready.");
+        log(CAT, "gcloud ready at:", gcloudPath);
+
+        // Step 2: Run gcloud auth application-default login
+        try {
+          await runGcloudAuth(gcloudPath, sendEvent);
+        } catch (authErr) {
+          logError(CAT, "gcloud auth failed:", authErr.message);
+          sendEvent("error", authErr.message);
+          res.end();
+          return true;
+        }
+
+        // Step 3: Read ADC credentials
+        sendEvent("progress", "Reading credentials...");
+        const adc = readADC();
+        if (!adc || !adc.refresh_token) {
+          logError(CAT, "ADC file missing or incomplete after auth");
+          sendEvent("error", "Authentication completed but credentials file is missing or incomplete. Try again.");
+          res.end();
+          return true;
+        }
+
+        // Step 4: Exchange for an access token
+        sendEvent("progress", "Obtaining access token...");
+        let tokenData;
+        try {
+          tokenData = await getAccessTokenFromADC(adc);
+        } catch (tokenErr) {
+          sendEvent("error", `Failed to obtain access token: ${tokenErr.message}`);
+          res.end();
+          return true;
+        }
+
+        // Step 5: Create the connection
+        log(CAT, "Creating calendar connection with ADC credentials");
+        const connection = addConnection(providerId, {
+          access_token: tokenData.access_token,
+          refresh_token: adc.refresh_token,
+          token_expiry: tokenData.expiry_date,
+          client_id: adc.client_id,
+          client_secret: adc.client_secret,
+          auth_method: "gcloud-adc",
         });
+
+        sendEvent("progress", "Google Calendar connected successfully!");
+        log(CAT, "Connection created:", connection.id);
+        sendEvent("done", { success: true, connectionId: connection.id });
+        res.end();
       } catch (err) {
-        removeConnection(connection.id);
-        jsonResponse(res, { error: err.message }, 500);
+        logError(CAT, "Unexpected error in OAuth flow:", err.message);
+        sendEvent("error", err.message);
+        res.end();
       }
       return true;
     }
 
     // List available calendars for a connection
     if (body.action === "list-calendars") {
+      log(CAT, "Listing calendars for connection:", body.connectionId);
       const conn = getConnection(body.connectionId);
       if (!conn) {
         jsonResponse(res, { error: "Connection not found" }, 404);
@@ -203,8 +407,10 @@ export async function handle(req, res, url) {
 
       try {
         const calendars = await provider.listCalendars(conn.credentials.access_token);
+        log(CAT, "Found calendars:", calendars.length);
         jsonResponse(res, { calendars });
       } catch (err) {
+        logError(CAT, "List calendars error:", err.message);
         jsonResponse(res, { error: err.message }, 500);
       }
       return true;
@@ -216,6 +422,7 @@ export async function handle(req, res, url) {
         jsonResponse(res, { error: "connectionId required" }, 400);
         return true;
       }
+      log(CAT, "Updating connection:", body.connectionId);
       const updated = updateConnection(body.connectionId, body.updates || {});
       if (!updated) {
         jsonResponse(res, { error: "Connection not found" }, 404);
@@ -231,6 +438,7 @@ export async function handle(req, res, url) {
         jsonResponse(res, { error: "connectionId required" }, 400);
         return true;
       }
+      log(CAT, "Removing connection:", body.connectionId);
       const removed = removeConnection(body.connectionId);
       jsonResponse(res, { removed });
       return true;
@@ -238,6 +446,7 @@ export async function handle(req, res, url) {
 
     // Test connection
     if (body.action === "test") {
+      log(CAT, "Testing connection:", body.connectionId);
       const conn = getConnection(body.connectionId);
       if (!conn) {
         jsonResponse(res, { error: "Connection not found" }, 404);
@@ -252,8 +461,10 @@ export async function handle(req, res, url) {
 
       try {
         const calendars = await provider.listCalendars(conn.credentials.access_token);
+        log(CAT, "Connection test passed, calendars:", calendars.length);
         jsonResponse(res, { ok: true, calendars: calendars.length });
       } catch (err) {
+        logError(CAT, "Connection test failed:", err.message);
         jsonResponse(res, { ok: false, error: err.message });
       }
       return true;
@@ -269,14 +480,17 @@ export async function handle(req, res, url) {
 
     if (body.action === "sync") {
       if (!body.connectionId) {
-        // Sync all enabled connections
+        log(CAT, "Syncing all enabled connections");
         const connections = listConnections().filter((c) => c.enabled);
         const reports = [];
         for (const conn of connections) {
           try {
+            log(CAT, "Syncing connection:", conn.id);
             const report = await syncConnection(conn.id);
+            log(CAT, "Sync complete:", { pulled: report.pulled, pushed: report.pushed, errors: report.errors.length });
             reports.push(report);
           } catch (err) {
+            logError(CAT, "Sync error for", conn.id, ":", err.message);
             reports.push({ connectionId: conn.id, errors: [err.message] });
           }
         }
@@ -285,9 +499,12 @@ export async function handle(req, res, url) {
       }
 
       try {
+        log(CAT, "Syncing connection:", body.connectionId);
         const report = await syncConnection(body.connectionId);
+        log(CAT, "Sync complete:", { pulled: report.pulled, pushed: report.pushed, errors: report.errors.length });
         jsonResponse(res, { report });
       } catch (err) {
+        logError(CAT, "Sync error:", err.message);
         jsonResponse(res, { error: err.message }, 500);
       }
       return true;
@@ -299,9 +516,12 @@ export async function handle(req, res, url) {
         return true;
       }
       try {
+        log(CAT, "Pushing event:", body.eventId, "to connection:", body.connectionId);
         await pushEvent(body.connectionId, body.eventId);
+        log(CAT, "Event pushed successfully");
         jsonResponse(res, { ok: true });
       } catch (err) {
+        logError(CAT, "Push event error:", err.message);
         jsonResponse(res, { error: err.message }, 500);
       }
       return true;

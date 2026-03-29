@@ -1,9 +1,19 @@
+import fs from "fs";
 import path from "path";
 import { ConfigManager } from "./ConfigManager";
 import { RunConfigManager } from "./RunConfigManager";
 import { SkillsManager } from "./SkillsManager";
 import { ServiceManager } from "./ServiceManager";
 import type { OpenCanvasConfig } from "./types";
+
+/** Atomic write: tmp file + rename. Crash-safe. */
+function atomicWrite(filePath: string, content: string): void {
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const tmp = `${filePath}.tmp.${process.pid}`;
+  fs.writeFileSync(tmp, content, "utf-8");
+  fs.renameSync(tmp, filePath);
+}
 
 /**
  * Class-based wrapper for per-project Open Canvas configuration.
@@ -84,7 +94,6 @@ export class ProjectConfigManager extends ConfigManager<OpenCanvasConfig> {
 
   /** Write raw YAML content to open-canvas.yaml. */
   writeRaw(content: string): void {
-    const fs = require("fs");
-    fs.writeFileSync(this.configPath, content, "utf-8");
+    atomicWrite(this.configPath, content);
   }
 }

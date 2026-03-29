@@ -12,6 +12,7 @@ import {
 } from "../../src/lib/globalConfig.js";
 import { RunConfigManager } from "../../src/lib/core/RunConfigManager.js";
 import { SkillsManager } from "../../src/lib/core/SkillsManager.js";
+import { atomicWriteSync } from "../lib/safe-write.mjs";
 
 function parseBody(req) {
   return new Promise((resolve, reject) => {
@@ -121,13 +122,13 @@ function ensureSkills(projectPath) {
   const openCanvasPath = path.join(skillsDir, "open-canvas.md");
   fs.mkdirSync(skillsDir, { recursive: true });
   if (!fs.existsSync(runAppPath)) {
-    fs.writeFileSync(runAppPath, RUN_APP_SKILLS);
+    atomicWriteSync(runAppPath, RUN_APP_SKILLS);
   }
   if (!fs.existsSync(dynamicSkillsPath)) {
-    fs.writeFileSync(dynamicSkillsPath, "dynamically add skills as you see fit\n");
+    atomicWriteSync(dynamicSkillsPath, "dynamically add skills as you see fit\n");
   }
   if (!fs.existsSync(openCanvasPath)) {
-    fs.writeFileSync(openCanvasPath, OPEN_CANVAS_SKILL);
+    atomicWriteSync(openCanvasPath, OPEN_CANVAS_SKILL);
   }
 }
 

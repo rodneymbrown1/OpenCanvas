@@ -64,6 +64,52 @@ Track token consumption and cost estimates per agent, per project. See what each
 
 ---
 
+## System Overview: Persistence Architecture
+
+Open Canvas uses a layered, file-based persistence model instead of a traditional database. All agent knowledge is stored in human-readable formats (Markdown, YAML, JSON) that LLMs can natively consume and produce — no vector store, no embeddings, no knowledge graph.
+
+![Persistence Architecture](assets/persistence-architecture.svg)
+
+**Four layers, zero database dependencies:**
+
+| Layer | Storage | Lifetime | Purpose |
+|-------|---------|----------|---------|
+| **Transient** | In-memory Maps | Process | Active sessions (max 50), port registry |
+| **Semi-Persistent** | localStorage | Browser tab | Session state, terminal layout per project |
+| **Persistent** | YAML / JSON / MD files | Permanent | Config, session history, skills, shared data |
+| **Contextual** | Generated Markdown | On-demand | Agent handoff, context file discovery, skills templates |
+
+**Write safety:** All file writes use atomic primitives (`tmp.{pid}` → `rename`) via `server/lib/safe-write.mjs`. Read-modify-write cycles are serialized per file path with an in-process async mutex. Persistence errors are logged to `~/.open-canvas/persistence-errors.log`.
+
+**Why this performs well:**
+- **Zero query overhead** — no database connections, no connection pools
+- **O(1) file access** — every piece of knowledge has a deterministic path derived from the project
+- **LLM-native formats** — Markdown and YAML require no transformation layer for agents
+- **Scoped isolation** — per-project knowledge, no multi-tenant filtering
+- **No cold start** — files are always on disk, first session is as fast as the hundredth
+- **Self-maintaining** — agents update their own documentation via the SkillsManager
+
+**Key paths:**
+```
+~/.open-canvas/
+├── app-config.yaml          # App configuration
+├── global.yaml              # Global config, project registry
+├── session-history/          # Per-project session logs (JSON)
+├── shared-data/
+│   ├── skills.md            # Global skills
+│   ├── GLOBAL_DATA.md       # Cross-project knowledge
+│   ├── raw/                 # Uploaded data files
+│   └── formatted/           # Processed markdown
+└── calendar/                # Calendar events, cron state
+
+<project>/.open-canvas/
+├── skills.md                # Project conventions (agent-maintained)
+├── PROJECT.md               # Project documentation (agent-maintained)
+└── AGENT_HANDOFF.md         # Generated on agent switch
+```
+
+---
+
 ## v1.0-beta Release Notes
 
 This release introduces the core feature set for Open Canvas:
