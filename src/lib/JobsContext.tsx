@@ -4,6 +4,7 @@ import {
   useState,
   useEffect,
   useCallback,
+  useRef,
   type ReactNode,
 } from "react";
 import { logger } from "@/lib/logger";
@@ -42,6 +43,7 @@ export function JobsProvider({ children }: { children: ReactNode }) {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [spawning, setSpawning] = useState(false);
 
+  const lastJobsHash = useRef("");
   const fetchJobs = useCallback(async () => {
     try {
       const res = await fetch("/api/sessions");
@@ -51,7 +53,12 @@ export function JobsProvider({ children }: { children: ReactNode }) {
           ...s,
           prompt: jobPrompts.get(s.id) || s.prompt || undefined,
         }));
-        setJobs(sessions);
+        // Only update state if sessions actually changed (avoid re-render churn)
+        const hash = sessions.map((s) => `${s.id}:${s.status}:${s.outputBytes}`).join("|");
+        if (hash !== lastJobsHash.current) {
+          lastJobsHash.current = hash;
+          setJobs(sessions);
+        }
 
         // Prune jobPrompts for completed/failed sessions (server has the prompt)
         const activeIds = new Set(

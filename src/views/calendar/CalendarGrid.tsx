@@ -1,4 +1,4 @@
-import { useRef, useEffect, useMemo } from "react";
+import { useRef, useEffect, useMemo, useCallback } from "react";
 import FullCalendar from "@fullcalendar/react";
 import dayGridPlugin from "@fullcalendar/daygrid";
 import timeGridPlugin from "@fullcalendar/timegrid";
@@ -36,13 +36,17 @@ export function CalendarGrid({
   onEventDrop,
 }: CalendarGridProps) {
   const calendarRef = useRef<FullCalendar>(null);
+  const programmaticNav = useRef(false);
 
-  // Sync external nav state to FullCalendar
+  // Sync external nav state to FullCalendar (skip datesSet feedback loop)
   useEffect(() => {
     const api = calendarRef.current?.getApi();
     if (!api) return;
+    programmaticNav.current = true;
     api.changeView(viewType);
     api.gotoDate(currentDate);
+    // Reset flag after FullCalendar finishes its synchronous render cycle
+    requestAnimationFrame(() => { programmaticNav.current = false; });
   }, [currentDate, viewType]);
 
   // Map CalendarEvent[] to FullCalendar EventInput[]
@@ -84,6 +88,20 @@ export function CalendarGrid({
     onDateSelect(info.startStr, info.endStr);
   };
 
+  // Sync FullCalendar's date range back to nav state — skip programmatic changes
+  const lastMidpoint = useRef(0);
+  const handleDatesSet = useCallback(
+    (info: { start: Date; end: Date }) => {
+      if (programmaticNav.current) return;
+      const mid = (info.start.getTime() + info.end.getTime()) / 2;
+      // Only update if midpoint changed by > 1 hour (avoids micro-drift loops)
+      if (Math.abs(mid - lastMidpoint.current) < 3_600_000) return;
+      lastMidpoint.current = mid;
+      onDateChange(new Date(mid));
+    },
+    [onDateChange]
+  );
+
   const handleEventDrop = (info: EventDropArg) => {
     const newStart = info.event.start?.toISOString();
     const newEnd = info.event.end?.toISOString();
@@ -109,13 +127,7 @@ export function CalendarGrid({
         eventClick={handleEventClick}
         select={handleDateSelect}
         eventDrop={handleEventDrop}
-        datesSet={(info) => {
-          // Sync FullCalendar's current date back to our state
-          const midpoint = new Date(
-            (info.start.getTime() + info.end.getTime()) / 2
-          );
-          onDateChange(midpoint);
-        }}
+        datesSet={handleDatesSet}
         eventDidMount={(info) => {
           // Add data attributes for CSS-based status styling
           const status = info.event.extendedProps.status;
