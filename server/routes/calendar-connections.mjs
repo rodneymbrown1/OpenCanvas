@@ -2,6 +2,7 @@
 // Google Calendar sync is handled via Claude's built-in MCP tools (gcal_*).
 // No OAuth, no gcloud CLI, no API keys required.
 
+import { spawn } from "child_process";
 import {
   listConnections,
   removeConnection,
@@ -70,6 +71,114 @@ export async function handle(req, res, url) {
     log(CAT, "Checking MCP Google Calendar status");
     const status = await mcpCheckAvailable();
     jsonResponse(res, status);
+    return true;
+  }
+
+  // ── POST /api/calendar/mcp-connect ────────────────────────────────────
+  // Guided connection flow: spawns Claude to trigger MCP Google Calendar auth.
+  // Streams progress via SSE so the UI can show the pipeline.
+  if (pathname === "/api/calendar/mcp-connect" && method === "POST") {
+    log(CAT, "Starting MCP Google Calendar connection pipeline");
+
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    });
+
+    const sendEvent = (type, data) => {
+      try {
+        res.write(`data: ${JSON.stringify({ type, data })}\n\n`);
+      } catch {}
+    };
+
+    sendEvent("progress", "Starting Claude to connect Google Calendar...");
+
+    const child = spawn("claude", [
+      "-p",
+      "Use the gcal_list_calendars MCP tool to list my Google calendars. If authentication is required, the MCP server will handle it. Return ONLY a JSON array of calendars with {id, summary, primary} fields.",
+    ], {
+      timeout: 120000, // 2 min for user to complete browser auth
+      env: { ...process.env },
+    });
+
+    let output = "";
+
+    child.stdout.on("data", (chunk) => {
+      const text = chunk.toString();
+      output += text;
+      const lines = text.split(/\r?\n/).filter(Boolean);
+      for (const line of lines) {
+        log(CAT, "[mcp-connect stdout]", line.slice(0, 200));
+        sendEvent("progress", line.slice(0, 200));
+      }
+    });
+
+    child.stderr.on("data", (chunk) => {
+      const text = chunk.toString();
+      const lines = text.split(/\r?\n/).filter(Boolean);
+      for (const line of lines) {
+        log(CAT, "[mcp-connect stderr]", line.slice(0, 200));
+        // Auth URLs or prompts show up in stderr
+        if (line.includes("http") || line.includes("auth") || line.includes("browser")) {
+          sendEvent("auth_action", line);
+        }
+        sendEvent("progress", line.slice(0, 200));
+      }
+    });
+
+    child.on("close", (code) => {
+      log(CAT, `mcp-connect exited with code ${code}`);
+      if (code === 0 && output.includes("[")) {
+        // Try to extract calendar info from output
+        try {
+          const cleaned = output.replace(/```(?:json)?\s*\n?/g, "").replace(/```\s*$/g, "");
+          const startIdx = cleaned.indexOf("[");
+          if (startIdx !== -1) {
+            let depth = 0;
+            for (let i = startIdx; i < cleaned.length; i++) {
+              if (cleaned[i] === "[") depth++;
+              if (cleaned[i] === "]") depth--;
+              if (depth === 0) {
+                const calendars = JSON.parse(cleaned.slice(startIdx, i + 1));
+                const primary = calendars.find((c) => c.primary);
+                sendEvent("done", {
+                  success: true,
+                  calendars,
+                  userEmail: primary?.summary || primary?.id || null,
+                });
+                res.end();
+                return;
+              }
+            }
+          }
+        } catch {}
+        sendEvent("done", { success: true, calendars: [], userEmail: null });
+      } else {
+        sendEvent("error", output.includes("auth")
+          ? "Google Calendar authentication may be required. Check your browser for a Google sign-in prompt."
+          : `Connection failed (exit code ${code}). Ensure Claude Code CLI has the Google Calendar MCP server configured.`);
+      }
+      res.end();
+    });
+
+    child.on("error", (err) => {
+      logError(CAT, "mcp-connect spawn error:", err.message);
+      sendEvent("error", err.code === "ENOENT"
+        ? "Claude Code CLI not found. Install it to enable Google Calendar sync."
+        : err.message);
+      res.end();
+    });
+
+    // Timeout handler
+    const timeout = setTimeout(() => {
+      try { child.kill(); } catch {}
+      sendEvent("error", "Connection timed out (2 minutes). Please try again.");
+      res.end();
+    }, 120000);
+
+    child.on("close", () => clearTimeout(timeout));
+
     return true;
   }
 
