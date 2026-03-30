@@ -89,24 +89,9 @@ Open Canvas uses a layered, file-based persistence model instead of a traditiona
 - **No cold start** — files are always on disk, first session is as fast as the hundredth
 - **Self-maintaining** — agents update their own documentation via the SkillsManager
 
-**Key paths:**
-```
-~/.open-canvas/
-├── app-config.yaml          # App configuration
-├── global.yaml              # Global config, project registry
-├── session-history/          # Per-project session logs (JSON)
-├── shared-data/
-│   ├── skills.md            # Global skills
-│   ├── GLOBAL_DATA.md       # Cross-project knowledge
-│   ├── raw/                 # Uploaded data files
-│   └── formatted/           # Processed markdown
-└── calendar/                # Calendar events, cron state
+**Where data lives:** All agent-managed data is stored under `~/.open-canvas/`. Agents read and write to this directory autonomously — maintaining project skills, recording session history, managing calendar events, and sharing data across projects. Everything is in human-readable formats (YAML, JSON, Markdown) so you can inspect or edit it directly.
 
-<project>/.open-canvas/
-├── skills.md                # Project conventions (agent-maintained)
-├── PROJECT.md               # Project documentation (agent-maintained)
-└── AGENT_HANDOFF.md         # Generated on agent switch
-```
+![.open-canvas file skeleton](assets/.opencanvas-file-skeleton.png)
 
 ---
 
