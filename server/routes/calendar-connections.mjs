@@ -82,18 +82,28 @@ export async function handle(req, res, url) {
 
     const body = await parseBody(req);
 
-    // If action is "fix-scopes", run the reconnect flow
+    // If action is "fix-scopes", attempt to fix by spawning Claude to reconnect
     if (body.action === "fix-scopes") {
-      log(CAT, "Attempting MCP scope fix via claude mcp reset");
+      log(CAT, "Attempting MCP scope fix via Claude reconnect");
       try {
-        await new Promise((resolve, reject) => {
-          execFile("claude", ["mcp", "reset-auth", "google-calendar"], {
-            timeout: 15000, encoding: "utf-8",
-          }, (err) => err ? reject(err) : resolve(null));
+        const result = await new Promise((resolve) => {
+          execFile("claude", ["-p",
+            "My Google Calendar MCP connection has insufficient OAuth scopes. Please disconnect and reconnect the Google Calendar integration with full read/write calendar permissions. Confirm when done."
+          ], { timeout: 60000, encoding: "utf-8" }, (err, stdout) => {
+            resolve({ err, stdout });
+          });
         });
-        jsonResponse(res, { ok: true, message: "MCP auth reset. Click 'Connect' again to re-authenticate with full permissions." });
+        jsonResponse(res, {
+          ok: true,
+          message: result.stdout?.includes("reconnect") || result.stdout?.includes("done") || result.stdout?.includes("success")
+            ? "Auth reset requested. Click 'Retry' to test the connection."
+            : "Claude attempted to fix permissions. Click 'Retry' to check. If it still fails, open Claude Code in a terminal and ask it to reconnect Google Calendar with full permissions.",
+        });
       } catch {
-        jsonResponse(res, { ok: true, message: "Run 'claude mcp reset-auth google-calendar' manually in your terminal, then try connecting again." });
+        jsonResponse(res, {
+          ok: false,
+          message: "Could not fix automatically. Open Claude Code in a terminal and say: 'Reconnect my Google Calendar with full read/write permissions'",
+        });
       }
       return true;
     }
