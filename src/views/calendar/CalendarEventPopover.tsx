@@ -129,6 +129,12 @@ export function CalendarEventPopover({
               recurring
             </span>
           )}
+          {event.googleCalendarId && (
+            <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400">
+              <ExternalLink size={10} />
+              Google
+            </span>
+          )}
           {event.source.projectPath && (
             <span className="text-xs px-2 py-0.5 rounded-full bg-[var(--bg-tertiary)] text-[var(--text-muted)]">
               {projectName(event.source.projectPath)}

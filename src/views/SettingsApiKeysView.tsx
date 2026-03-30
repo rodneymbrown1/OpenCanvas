@@ -9,12 +9,10 @@ interface ApiKeyEntry {
   category: "ai" | "calendar" | "custom";
 }
 
-const SUGGESTED_KEYS: { id: string; label: string; placeholder: string; category: "ai" | "calendar" }[] = [
+const SUGGESTED_KEYS: { id: string; label: string; placeholder: string; category: "ai" }[] = [
   { id: "anthropic", label: "Anthropic (Claude)", placeholder: "sk-ant-...", category: "ai" },
   { id: "openai", label: "OpenAI (Codex)", placeholder: "sk-...", category: "ai" },
   { id: "google", label: "Google (Gemini)", placeholder: "AIza...", category: "ai" },
-  { id: "google_calendar_client_id", label: "Google Calendar Client ID", placeholder: "xxxxx.apps.googleusercontent.com", category: "calendar" },
-  { id: "google_calendar_client_secret", label: "Google Calendar Client Secret", placeholder: "GOCSPX-...", category: "calendar" },
 ];
 
 function getCategory(id: string): "ai" | "calendar" | "custom" {

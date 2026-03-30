@@ -17,6 +17,8 @@ import {
 
 import { expandCron } from "../../src/lib/calendarCronExpander.js";
 import { triggerEventNow } from "../cron-scheduler.mjs";
+import { mcpCreateEvent, mcpUpdateEvent, mcpDeleteEvent } from "../lib/mcp-calendar.mjs";
+import { log, logError } from "../logger.mjs";
 
 function parseBody(req) {
   return new Promise((resolve, reject) => {
@@ -114,6 +116,7 @@ export async function handle(req, res, url) {
         jsonResponse(res, { error: "title and startTime required" }, 400);
         return true;
       }
+      const syncToGoogle = body.event.syncToGoogle === true;
       const event = addEvent({
         title: body.event.title,
         description: body.event.description,
@@ -127,6 +130,17 @@ export async function handle(req, res, url) {
         googleCalendarId: body.event.googleCalendarId,
         tags: body.event.tags,
       });
+      // Async push to Google Calendar (fire-and-forget)
+      if (syncToGoogle) {
+        mcpCreateEvent("primary", event)
+          .then((result) => {
+            const gcalId = `mcp:${result.id}`;
+            updateEvent(event.id, { googleCalendarId: gcalId });
+            log("calendar", `Synced new event to Google: ${event.id} → ${result.id}`);
+          })
+          .catch((err) => logError("calendar", `Google sync failed for ${event.id}:`, err.message));
+      }
+
       jsonResponse(res, { event });
       return true;
     }
@@ -141,6 +155,15 @@ export async function handle(req, res, url) {
         jsonResponse(res, { error: "event not found" }, 404);
         return true;
       }
+
+      // Async push update to Google Calendar
+      if (event.googleCalendarId && event.googleCalendarId.startsWith("mcp:")) {
+        const remoteId = event.googleCalendarId.replace("mcp:", "");
+        mcpUpdateEvent("primary", remoteId, body.updates || {})
+          .then(() => log("calendar", `Synced update to Google: ${body.id} → ${remoteId}`))
+          .catch((err) => logError("calendar", `Google update sync failed for ${body.id}:`, err.message));
+      }
+
       jsonResponse(res, { event });
       return true;
     }
@@ -150,11 +173,26 @@ export async function handle(req, res, url) {
         jsonResponse(res, { error: "id required" }, 400);
         return true;
       }
+
+      // Check for Google Calendar ID before deleting locally
+      const { getEventById } = await import("../../src/lib/calendarConfig.js");
+      const toDelete = getEventById(body.id);
+      const gcalId = toDelete?.googleCalendarId;
+
       const deleted = deleteEvent(body.id);
       if (!deleted) {
         jsonResponse(res, { error: "event not found" }, 404);
         return true;
       }
+
+      // Async delete from Google Calendar
+      if (gcalId && gcalId.startsWith("mcp:")) {
+        const remoteId = gcalId.replace("mcp:", "");
+        mcpDeleteEvent("primary", remoteId)
+          .then(() => log("calendar", `Deleted from Google: ${remoteId}`))
+          .catch((err) => logError("calendar", `Google delete failed for ${remoteId}:`, err.message));
+      }
+
       jsonResponse(res, { deleted: true });
       return true;
     }

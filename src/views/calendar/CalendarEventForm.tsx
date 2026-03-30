@@ -60,12 +60,17 @@ export function CalendarEventForm({ onSubmit, onCancel, initialStart, initialEnd
   const [projects, setProjects] = useState<Project[]>([]);
   const [agents, setAgents] = useState<AgentInfo[]>(FALLBACK_AGENTS);
 
+  // Google Calendar sync
+  const [syncToGoogle, setSyncToGoogle] = useState(!!editEvent?.googleCalendarId);
+  const [mcpAvailable, setMcpAvailable] = useState(false);
+
   useEffect(() => {
-    // Fetch installed agents and projects in parallel
+    // Fetch installed agents, projects, and MCP status in parallel
     Promise.all([
       fetch("/api/agents").then((r) => r.json()).catch(() => null),
       fetch("/api/projects").then((r) => r.json()).catch(() => null),
-    ]).then(([agentData, projectData]) => {
+      fetch("/api/calendar/mcp-status").then((r) => r.json()).catch(() => null),
+    ]).then(([agentData, projectData, mcpData]) => {
       if (agentData?.agents) {
         setAgents(agentData.agents);
         // Default to first installed agent
@@ -74,6 +79,9 @@ export function CalendarEventForm({ onSubmit, onCancel, initialStart, initialEnd
       }
       if (projectData?.projects) {
         setProjects(projectData.projects.filter((p: Project) => p.exists));
+      }
+      if (mcpData?.available) {
+        setMcpAvailable(true);
       }
     });
   }, []);
@@ -89,6 +97,7 @@ export function CalendarEventForm({ onSubmit, onCancel, initialStart, initialEnd
       allDay,
       recurrence: recurrence || undefined,
       source: { agent: "user" as const },
+      syncToGoogle: syncToGoogle && mcpAvailable ? true : undefined,
     };
 
     if (isAgentEvent) {
@@ -303,6 +312,25 @@ export function CalendarEventForm({ onSubmit, onCancel, initialStart, initialEnd
             className={inputClass}
           />
         )}
+
+        {/* Google Calendar sync toggle */}
+        <label
+          className={`flex items-center gap-2 text-xs py-2 ${
+            mcpAvailable
+              ? "text-[var(--text-secondary)] cursor-pointer"
+              : "text-[var(--text-muted)] opacity-50 cursor-not-allowed"
+          }`}
+          title={mcpAvailable ? undefined : "Google Calendar MCP not available. Ensure Claude Code CLI has access."}
+        >
+          <input
+            type="checkbox"
+            checked={syncToGoogle}
+            onChange={(e) => setSyncToGoogle(e.target.checked)}
+            disabled={!mcpAvailable}
+            className="rounded border-[var(--border)] accent-[var(--accent)]"
+          />
+          {editEvent?.googleCalendarId ? "Synced with Google Calendar" : "Add to Google Calendar"}
+        </label>
 
         <button
           type="submit"

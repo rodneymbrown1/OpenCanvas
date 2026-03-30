@@ -47,6 +47,119 @@ interface GitHubAuthStatus {
   message?: string;
 }
 
+// ── Google Calendar MCP Status Card ─────────────────────────────────────────
+
+interface McpStatus {
+  available: boolean;
+  calendars: { id: string; summary: string; primary: boolean }[];
+  userEmail: string | null;
+  error: string | null;
+}
+
+function GoogleCalendarMcpCard() {
+  const [status, setStatus] = useState<McpStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [pulling, setPulling] = useState(false);
+  const [pullResult, setPullResult] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/calendar/mcp-status")
+      .then((r) => r.json())
+      .then((data) => setStatus(data))
+      .catch(() => setStatus({ available: false, calendars: [], userEmail: null, error: "Failed to check MCP status" }))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const handlePull = async () => {
+    setPulling(true);
+    setPullResult(null);
+    try {
+      const res = await fetch("/api/calendar/mcp-sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "pull", calendarId: "primary" }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setPullResult(`Pulled ${data.pulled} new, updated ${data.updated}${data.errors?.length ? `, ${data.errors.length} errors` : ""}`);
+      } else {
+        setPullResult(data.error || "Pull failed");
+      }
+    } catch (err: any) {
+      setPullResult(err.message || "Pull failed");
+    } finally {
+      setPulling(false);
+      setTimeout(() => setPullResult(null), 5000);
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      <h3 className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider">
+        Google Calendar
+      </h3>
+      <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-5 space-y-3">
+        <div className="flex items-start gap-3">
+          <Calendar size={20} className="text-[var(--accent)] mt-0.5 shrink-0" />
+          <div className="space-y-1.5 flex-1">
+            <div className="flex items-center gap-2">
+              <p className="text-sm text-[var(--text-primary)] font-medium">Google Calendar</p>
+              {loading ? (
+                <Loader2 size={12} className="animate-spin text-[var(--text-muted)]" />
+              ) : status?.available ? (
+                <span className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-green-500/10 text-green-400 font-medium">
+                  <CheckCircle size={10} /> Connected
+                </span>
+              ) : (
+                <span className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-red-500/10 text-red-400 font-medium">
+                  <AlertCircle size={10} /> Not connected
+                </span>
+              )}
+            </div>
+            {status?.available && status.userEmail && (
+              <p className="text-xs text-[var(--text-muted)]">{status.userEmail}</p>
+            )}
+            {status?.available && status.calendars.length > 0 && (
+              <div className="text-xs text-[var(--text-muted)]">
+                {status.calendars.length} calendar{status.calendars.length !== 1 ? "s" : ""} accessible
+              </div>
+            )}
+            {!loading && !status?.available && (
+              <p className="text-xs text-[var(--text-muted)]">
+                {status?.error || "Google Calendar MCP is not available."}{" "}
+                Ensure Claude Code CLI is installed and has Google Calendar MCP access.
+              </p>
+            )}
+          </div>
+        </div>
+
+        {status?.available && (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handlePull}
+              disabled={pulling}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-[var(--bg-primary)] border border-[var(--border)] hover:border-[var(--accent)] transition-colors disabled:opacity-50"
+            >
+              {pulling ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+              Pull Events from Google
+            </button>
+            {pullResult && (
+              <span className="text-xs text-[var(--text-muted)]">{pullResult}</span>
+            )}
+          </div>
+        )}
+
+        <div className="flex items-center gap-2 text-xs text-[var(--text-muted)] bg-[var(--bg-primary)] rounded-lg px-3 py-2">
+          <CheckCircle size={12} className="text-[var(--accent)] shrink-0" />
+          <span>Synced via Claude MCP. No API keys or OAuth setup required.</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Main Page ───────────────────────────────────────────────────────────────
+
 export function ConnectionsPage() {
   const [connections, setConnections] = useState<ConnectionInfo[]>([]);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
@@ -390,41 +503,7 @@ export function ConnectionsPage() {
       )}
 
       {/* Google Calendar via MCP */}
-      <div className="space-y-2">
-        <h3 className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider">
-          Google Calendar
-        </h3>
-        <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-5 space-y-3">
-          <div className="flex items-start gap-3">
-            <Calendar size={20} className="text-[var(--accent)] mt-0.5 shrink-0" />
-            <div className="space-y-1.5">
-              <p className="text-sm text-[var(--text-primary)]">
-                Google Calendar is available through Claude's built-in MCP server.
-              </p>
-              <p className="text-xs text-[var(--text-muted)]">
-                No setup needed. Claude can create, list, update, and delete calendar events directly.
-                Ask Claude to connect your Google Calendar if it hasn't already.
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2 text-xs text-[var(--text-muted)] bg-[var(--bg-primary)] rounded-lg px-3 py-2">
-            <CheckCircle size={12} className="text-green-400 shrink-0" />
-            <span>Available via MCP: <code className="text-[var(--accent)]">gcal_list_events</code>, <code className="text-[var(--accent)]">gcal_create_event</code>, and more</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Existing connections (legacy) */}
-      {connections.length > 0 && (
-        <div className="space-y-2">
-          <h3 className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider">
-            Direct Connections
-          </h3>
-          <p className="text-xs text-[var(--text-muted)]">
-            These are OAuth connections configured previously. The MCP server above is the recommended method.
-          </p>
-        </div>
-      )}
+      <GoogleCalendarMcpCard />
     </div>
   );
 }
