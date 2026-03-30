@@ -129,8 +129,27 @@ export async function handle(req, res, url) {
 
     child.on("close", (code) => {
       log(CAT, `mcp-connect exited with code ${code}`);
-      if (code === 0 && output.includes("[")) {
-        // Try to extract calendar info from output
+      const lower = output.toLowerCase();
+
+      // Detect specific error conditions from Claude's output
+      if (lower.includes("insufficient") && lower.includes("scope")) {
+        sendEvent("error", "Insufficient OAuth scopes. Disconnect Google Calendar in Claude's MCP settings, then reconnect and grant all requested Calendar permissions.");
+        res.end();
+        return;
+      }
+      if (lower.includes("authenticate") || lower.includes("sign in") || lower.includes("authorization required")) {
+        sendEvent("error", "Google Calendar authentication required. Open Claude Code and reconnect the Google Calendar MCP server.");
+        res.end();
+        return;
+      }
+      if (lower.includes("not available") || lower.includes("no mcp") || lower.includes("tool not found") || lower.includes("not configured")) {
+        sendEvent("error", "Google Calendar MCP server is not configured in Claude. Run: claude mcp add google-calendar");
+        res.end();
+        return;
+      }
+
+      // Try to extract calendar JSON from successful output
+      if (code === 0) {
         try {
           const cleaned = output.replace(/```(?:json)?\s*\n?/g, "").replace(/```\s*$/g, "");
           const startIdx = cleaned.indexOf("[");
@@ -153,11 +172,10 @@ export async function handle(req, res, url) {
             }
           }
         } catch {}
+        // Claude returned 0 but no parseable JSON — might still be a message
         sendEvent("done", { success: true, calendars: [], userEmail: null });
       } else {
-        sendEvent("error", output.includes("auth")
-          ? "Google Calendar authentication may be required. Check your browser for a Google sign-in prompt."
-          : `Connection failed (exit code ${code}). Ensure Claude Code CLI has the Google Calendar MCP server configured.`);
+        sendEvent("error", `Connection failed (exit code ${code}). Check that Claude Code CLI and Google Calendar MCP are configured.`);
       }
       res.end();
     });
