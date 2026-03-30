@@ -2,17 +2,16 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Link2,
-  Plus,
   Trash2,
   RefreshCw,
   CheckCircle,
   AlertCircle,
-  ExternalLink,
   Loader2,
   Calendar,
   Github,
   LogOut,
 } from "lucide-react";
+import { logger } from "../lib/logger";
 
 interface ConnectionInfo {
   id: string;
@@ -22,6 +21,7 @@ interface ConnectionInfo {
     has_access_token: boolean;
     has_refresh_token: boolean;
     token_expiry?: string;
+    auth_method?: string;
   };
   settings: {
     direction: string;
@@ -51,7 +51,6 @@ export function ConnectionsPage() {
   const [connections, setConnections] = useState<ConnectionInfo[]>([]);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [syncing, setSyncing] = useState<string | null>(null);
-  const [connecting, setConnecting] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   // GitHub auth state
@@ -60,6 +59,8 @@ export function ConnectionsPage() {
   const [ghOneTimeCode, setGhOneTimeCode] = useState<string | null>(null);
   const [ghProgress, setGhProgress] = useState<string[]>([]);
   const ghProgressRef = useRef<HTMLDivElement>(null);
+
+  // Calendar connection state (legacy OAuth removed — MCP is primary)
 
   const fetchConnections = useCallback(async () => {
     try {
@@ -146,50 +147,7 @@ export function ConnectionsPage() {
     setTimeout(() => setMessage(null), 3000);
   };
 
-  const initiateOAuth = async (providerId: string) => {
-    setConnecting(true);
-    setMessage(null);
-    try {
-      const res = await fetch("/api/calendar/connections", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "initiate-oauth", provider: providerId }),
-      });
-      const data = await res.json();
-
-      if (!res.ok) {
-        setMessage({ type: "error", text: data.error + (data.hint ? ` (${data.hint})` : "") });
-        setConnecting(false);
-        return;
-      }
-
-      // Open auth URL in new tab
-      window.open(data.authUrl, "_blank");
-      setMessage({ type: "success", text: "Authorization opened in your browser. Complete the flow there." });
-
-      // Poll for connection to complete
-      const pollInterval = setInterval(async () => {
-        await fetchConnections();
-        const conn = (await fetch("/api/calendar/connections").then((r) => r.json())).connections;
-        const pending = conn?.find((c: any) => c.id === data.connectionId);
-        if (pending?.credentials?.has_access_token) {
-          clearInterval(pollInterval);
-          setConnecting(false);
-          setMessage({ type: "success", text: "Connected successfully!" });
-          setTimeout(() => setMessage(null), 3000);
-        }
-      }, 2000);
-
-      // Stop polling after 5 min
-      setTimeout(() => {
-        clearInterval(pollInterval);
-        setConnecting(false);
-      }, 5 * 60 * 1000);
-    } catch (err: any) {
-      setMessage({ type: "error", text: err.message });
-      setConnecting(false);
-    }
-  };
+  // OAuth flow removed — Google Calendar uses Claude's built-in MCP server
 
   const removeConnection = async (id: string) => {
     await fetch("/api/calendar/connections", {
@@ -363,6 +321,9 @@ export function ConnectionsPage() {
                     <span className="flex items-center gap-1 text-xs text-green-400 bg-green-500/10 px-2 py-0.5 rounded-full">
                       <CheckCircle size={10} />
                       Connected
+                      {conn.credentials.auth_method === "gcloud-adc" && (
+                        <span className="ml-1 text-[10px] opacity-70">via gcloud</span>
+                      )}
                     </span>
                   ) : (
                     <span className="flex items-center gap-1 text-xs text-yellow-400 bg-yellow-500/10 px-2 py-0.5 rounded-full">
@@ -428,47 +389,42 @@ export function ConnectionsPage() {
         </div>
       )}
 
-      {/* Empty state */}
-      {connections.length === 0 && !connecting && (
-        <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-8 text-center space-y-3">
-          <Link2 size={32} className="text-[var(--text-muted)] mx-auto" />
-          <p className="text-sm text-[var(--text-secondary)]">No calendar connections</p>
+      {/* Google Calendar via MCP */}
+      <div className="space-y-2">
+        <h3 className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider">
+          Google Calendar
+        </h3>
+        <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-5 space-y-3">
+          <div className="flex items-start gap-3">
+            <Calendar size={20} className="text-[var(--accent)] mt-0.5 shrink-0" />
+            <div className="space-y-1.5">
+              <p className="text-sm text-[var(--text-primary)]">
+                Google Calendar is available through Claude's built-in MCP server.
+              </p>
+              <p className="text-xs text-[var(--text-muted)]">
+                No setup needed. Claude can create, list, update, and delete calendar events directly.
+                Ask Claude to connect your Google Calendar if it hasn't already.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 text-xs text-[var(--text-muted)] bg-[var(--bg-primary)] rounded-lg px-3 py-2">
+            <CheckCircle size={12} className="text-green-400 shrink-0" />
+            <span>Available via MCP: <code className="text-[var(--accent)]">gcal_list_events</code>, <code className="text-[var(--accent)]">gcal_create_event</code>, and more</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Existing connections (legacy) */}
+      {connections.length > 0 && (
+        <div className="space-y-2">
+          <h3 className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider">
+            Direct Connections
+          </h3>
           <p className="text-xs text-[var(--text-muted)]">
-            Connect Google Calendar to sync events bidirectionally
+            These are OAuth connections configured previously. The MCP server above is the recommended method.
           </p>
         </div>
       )}
-
-      {/* Add connection */}
-      <div className="space-y-2">
-        <h3 className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider">
-          Add Connection
-        </h3>
-        <div className="flex gap-2">
-          {providers.map((p) => (
-            <button
-              key={p.id}
-              onClick={() => initiateOAuth(p.id)}
-              disabled={connecting}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-[var(--bg-secondary)] border border-[var(--border)] hover:border-[var(--accent)] text-sm transition-colors disabled:opacity-50"
-            >
-              {connecting ? (
-                <Loader2 size={14} className="animate-spin" />
-              ) : (
-                <ExternalLink size={14} />
-              )}
-              Connect {p.name}
-            </button>
-          ))}
-          <button
-            disabled
-            className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-[var(--bg-secondary)] border border-[var(--border)] text-sm text-[var(--text-muted)] opacity-50 cursor-not-allowed"
-            title="Coming soon"
-          >
-            Outlook (coming soon)
-          </button>
-        </div>
-      </div>
     </div>
   );
 }
