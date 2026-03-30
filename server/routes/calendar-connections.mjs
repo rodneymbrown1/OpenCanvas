@@ -1,7 +1,10 @@
 // server/routes/calendar-connections.mjs — Calendar connection & sync API routes
-// Uses gcloud CLI for browser-based OAuth (Application Default Credentials)
+// Supports two OAuth methods:
+//   1. Direct OAuth (default) — local callback server, no CLI dependency
+//   2. gcloud CLI fallback — uses Application Default Credentials
 
 import { execFile, spawn } from "child_process";
+import http from "http";
 import fs from "fs";
 import path from "path";
 import os from "os";
@@ -14,6 +17,7 @@ import {
 } from "../../src/lib/calendar/connections.js";
 import { getProvider, listProviders } from "../../src/lib/calendar/providers/index.js";
 import { syncConnection, pushEvent } from "../../src/lib/calendar/sync/CalendarSyncEngine.js";
+import { readGlobalConfig } from "../../src/lib/globalConfig.js";
 import { log, logWarn, logError } from "../logger.mjs";
 
 const CAT = "calendar";
@@ -238,6 +242,89 @@ function runGcloudAuth(gcloudPath, sendEvent) {
   });
 }
 
+// ── Direct OAuth flow (no CLI dependency) ─────────────────────────────────────
+
+const OAUTH_SUCCESS_HTML = `<!DOCTYPE html><html><body style="font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#0f1117;color:#e8e8e8">
+<div style="text-align:center"><h2>Google Calendar Connected</h2><p>You can close this tab and return to Open Canvas.</p></div></body></html>`;
+
+const OAUTH_ERROR_HTML = (msg) => `<!DOCTYPE html><html><body style="font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#0f1117;color:#e8e8e8">
+<div style="text-align:center"><h2>Connection Failed</h2><p>${msg}</p></div></body></html>`;
+
+/**
+ * Run the direct OAuth2 flow:
+ *  1. Start a temp HTTP server on a random port
+ *  2. Open browser to Google consent screen
+ *  3. Google redirects to localhost:{port}/oauth/callback?code=...
+ *  4. Exchange code for tokens
+ *  5. Shut down temp server
+ */
+function runDirectOAuth(provider, clientId, clientSecret, sendEvent) {
+  return new Promise((resolve, reject) => {
+    const server = http.createServer(async (req, res) => {
+      const reqUrl = new URL(req.url, `http://localhost`);
+
+      if (reqUrl.pathname !== "/oauth/callback") {
+        res.writeHead(404);
+        res.end("Not found");
+        return;
+      }
+
+      const code = reqUrl.searchParams.get("code");
+      const error = reqUrl.searchParams.get("error");
+
+      if (error) {
+        res.writeHead(200, { "Content-Type": "text/html" });
+        res.end(OAUTH_ERROR_HTML(`Google returned: ${error}`));
+        server.close();
+        reject(new Error(`OAuth denied: ${error}`));
+        return;
+      }
+
+      if (!code) {
+        res.writeHead(200, { "Content-Type": "text/html" });
+        res.end(OAUTH_ERROR_HTML("No authorization code received"));
+        server.close();
+        reject(new Error("No authorization code received"));
+        return;
+      }
+
+      sendEvent("progress", "Authorization received, exchanging for tokens...");
+
+      try {
+        const redirectUri = `http://localhost:${server.address().port}/oauth/callback`;
+        const tokens = await provider.exchangeCode(code, clientId, clientSecret, redirectUri);
+
+        res.writeHead(200, { "Content-Type": "text/html" });
+        res.end(OAUTH_SUCCESS_HTML);
+        server.close();
+        resolve(tokens);
+      } catch (err) {
+        res.writeHead(200, { "Content-Type": "text/html" });
+        res.end(OAUTH_ERROR_HTML(err.message));
+        server.close();
+        reject(err);
+      }
+    });
+
+    // Listen on random port
+    server.listen(0, () => {
+      const port = server.address().port;
+      const authUrl = provider.getAuthUrl(clientId, clientSecret, port);
+      log(CAT, `Direct OAuth callback server listening on port ${port}`);
+      sendEvent("progress", "Opening browser for Google authentication...");
+      sendEvent("auth_url", authUrl);
+    });
+
+    // Timeout after 5 minutes
+    const timeout = setTimeout(() => {
+      server.close();
+      reject(new Error("OAuth flow timed out (5 minutes). Please try again."));
+    }, 5 * 60 * 1000);
+
+    server.on("close", () => clearTimeout(timeout));
+  });
+}
+
 // ── Route handler ──────────────────────────────────────────────────────────────
 
 export async function handle(req, res, url) {
@@ -267,11 +354,18 @@ export async function handle(req, res, url) {
     const gcloudPath = await checkGcloud();
     const adc = readADC();
     const hasValidADC = !!(adc && adc.client_id && adc.refresh_token);
+    const globalConfig = readGlobalConfig();
+    const hasClientCreds = !!(
+      globalConfig.api_keys?.google_calendar_client_id &&
+      globalConfig.api_keys?.google_calendar_client_secret
+    );
 
     jsonResponse(res, {
+      directOAuthAvailable: hasClientCreds,
       gcloudInstalled: !!gcloudPath,
       hasADC: hasValidADC,
       adcPath: ADC_PATH,
+      method: hasClientCreds ? "direct" : (!!gcloudPath ? "gcloud" : "none"),
     });
     return true;
   }
@@ -280,15 +374,13 @@ export async function handle(req, res, url) {
   if (pathname === "/api/calendar/connections" && method === "POST") {
     const body = await parseBody(req);
 
-    // ── Initiate gcloud-based OAuth flow (SSE streaming) ────────────────
+    // ── Initiate OAuth flow (direct first, gcloud fallback) ──────────────
     if (body.action === "initiate-oauth") {
       const providerId = body.provider;
       if (!providerId) {
         jsonResponse(res, { error: "provider required" }, 400);
         return true;
       }
-
-      log(CAT, "Initiating gcloud OAuth flow for provider:", providerId);
 
       // Switch to SSE streaming
       res.writeHead(200, {
@@ -303,8 +395,53 @@ export async function handle(req, res, url) {
         } catch {}
       };
 
+      // Check for client ID/secret in API keys (direct OAuth)
+      const globalConfig = readGlobalConfig();
+      const clientId = globalConfig.api_keys?.google_calendar_client_id;
+      const clientSecret = globalConfig.api_keys?.google_calendar_client_secret;
+
+      // ── Method 1: Direct OAuth (preferred) ────────────────────────────
+      if (clientId && clientSecret) {
+        log(CAT, "Using direct OAuth flow (client credentials configured)");
+        sendEvent("progress", "Starting Google Calendar authentication...");
+
+        const provider = getProvider(providerId);
+        if (!provider) {
+          sendEvent("error", "Unknown calendar provider");
+          res.end();
+          return true;
+        }
+
+        try {
+          const tokens = await runDirectOAuth(provider, clientId, clientSecret, sendEvent);
+
+          log(CAT, "Direct OAuth complete, creating connection");
+          const connection = addConnection(providerId, {
+            access_token: tokens.access_token,
+            refresh_token: tokens.refresh_token,
+            token_expiry: tokens.expiry_date,
+            client_id: clientId,
+            client_secret: clientSecret,
+            auth_method: "direct-oauth",
+          });
+
+          sendEvent("progress", "Google Calendar connected successfully!");
+          log(CAT, "Connection created:", connection.id);
+          sendEvent("done", { success: true, connectionId: connection.id });
+          res.end();
+        } catch (err) {
+          logError(CAT, "Direct OAuth failed:", err.message);
+          sendEvent("error", err.message);
+          res.end();
+        }
+        return true;
+      }
+
+      // ── Method 2: gcloud CLI fallback ─────────────────────────────────
+      log(CAT, "No client credentials configured, falling back to gcloud CLI");
+      sendEvent("progress", "No API keys configured. Trying gcloud CLI fallback...");
+
       try {
-        // Step 1: Check gcloud installed
         sendEvent("progress", "Checking for Google Cloud SDK...");
         let gcloudPath = await checkGcloud();
 
@@ -312,14 +449,13 @@ export async function handle(req, res, url) {
           sendEvent("progress", "Google Cloud SDK not found. Installing...");
           log(CAT, "gcloud not found, attempting install");
 
-          // Check if brew is available
           const brewInstalled = await new Promise((resolve) => {
             execFile("which", ["brew"], (err) => resolve(!err));
           });
 
           if (!brewInstalled) {
-            logError(CAT, "Homebrew not available for gcloud install");
-            sendEvent("error", "Google Cloud SDK is not installed and Homebrew is not available. Install manually: https://cloud.google.com/sdk/docs/install");
+            logError(CAT, "No OAuth method available");
+            sendEvent("error", "No connection method available. Either add google_calendar_client_id and google_calendar_client_secret in Settings > API Keys, or install the Google Cloud SDK manually: https://cloud.google.com/sdk/docs/install");
             res.end();
             return true;
           }
@@ -327,7 +463,7 @@ export async function handle(req, res, url) {
           try {
             gcloudPath = await installGcloud(sendEvent);
           } catch (installErr) {
-            sendEvent("error", installErr.message);
+            sendEvent("error", `gcloud install failed: ${installErr.message}. Add google_calendar_client_id and google_calendar_client_secret in Settings > API Keys instead.`);
             res.end();
             return true;
           }
@@ -336,7 +472,6 @@ export async function handle(req, res, url) {
         sendEvent("progress", "Google Cloud SDK is ready.");
         log(CAT, "gcloud ready at:", gcloudPath);
 
-        // Step 2: Run gcloud auth application-default login
         try {
           await runGcloudAuth(gcloudPath, sendEvent);
         } catch (authErr) {
@@ -346,7 +481,6 @@ export async function handle(req, res, url) {
           return true;
         }
 
-        // Step 3: Read ADC credentials
         sendEvent("progress", "Reading credentials...");
         const adc = readADC();
         if (!adc || !adc.refresh_token) {
@@ -356,7 +490,6 @@ export async function handle(req, res, url) {
           return true;
         }
 
-        // Step 4: Exchange for an access token
         sendEvent("progress", "Obtaining access token...");
         let tokenData;
         try {
@@ -367,7 +500,6 @@ export async function handle(req, res, url) {
           return true;
         }
 
-        // Step 5: Create the connection
         log(CAT, "Creating calendar connection with ADC credentials");
         const connection = addConnection(providerId, {
           access_token: tokenData.access_token,
