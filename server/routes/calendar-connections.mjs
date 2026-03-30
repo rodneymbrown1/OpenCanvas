@@ -2,7 +2,7 @@
 // Google Calendar sync is handled via Claude's built-in MCP tools (gcal_*).
 // No OAuth, no gcloud CLI, no API keys required.
 
-import { spawn } from "child_process";
+import { spawn, execFile } from "child_process";
 import {
   listConnections,
   removeConnection,
@@ -75,16 +75,41 @@ export async function handle(req, res, url) {
   }
 
   // ── POST /api/calendar/mcp-connect ────────────────────────────────────
-  // Guided connection flow: spawns Claude to trigger MCP Google Calendar auth.
-  // Streams progress via SSE so the UI can show the pipeline.
+  // Multi-step diagnostic pipeline. Checks each prerequisite, reports
+  // step-by-step status, and offers actionable fix suggestions.
   if (pathname === "/api/calendar/mcp-connect" && method === "POST") {
-    log(CAT, "Starting MCP Google Calendar connection pipeline");
+    log(CAT, "Starting MCP Google Calendar diagnostic pipeline");
 
+    const body = await parseBody(req);
+
+    // If action is "fix-scopes", run the reconnect flow
+    if (body.action === "fix-scopes") {
+      log(CAT, "Attempting MCP scope fix via claude mcp reset");
+      try {
+        await new Promise((resolve, reject) => {
+          execFile("claude", ["mcp", "reset-auth", "google-calendar"], {
+            timeout: 15000, encoding: "utf-8",
+          }, (err) => err ? reject(err) : resolve(null));
+        });
+        jsonResponse(res, { ok: true, message: "MCP auth reset. Click 'Connect' again to re-authenticate with full permissions." });
+      } catch {
+        jsonResponse(res, { ok: true, message: "Run 'claude mcp reset-auth google-calendar' manually in your terminal, then try connecting again." });
+      }
+      return true;
+    }
+
+    // SSE streaming pipeline
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
       Connection: "keep-alive",
     });
+
+    const sendStep = (step, status, detail) => {
+      try {
+        res.write(`data: ${JSON.stringify({ type: "step", step, status, detail })}\n\n`);
+      } catch {}
+    };
 
     const sendEvent = (type, data) => {
       try {
@@ -92,111 +117,133 @@ export async function handle(req, res, url) {
       } catch {}
     };
 
-    sendEvent("progress", "Starting Claude to connect Google Calendar...");
-
-    const child = spawn("claude", [
-      "-p",
-      "Use the gcal_list_calendars MCP tool to list my Google calendars. If authentication is required, the MCP server will handle it. Return ONLY a JSON array of calendars with {id, summary, primary} fields.",
-    ], {
-      timeout: 120000, // 2 min for user to complete browser auth
-      env: { ...process.env },
+    // ── Step 1: Check Claude CLI ──────────────────────────────────────
+    sendStep(1, "running", "Checking Claude Code CLI...");
+    const claudeInstalled = await new Promise((resolve) => {
+      execFile("which", ["claude"], { timeout: 5000 }, (err, stdout) => {
+        resolve(err ? null : stdout.trim());
+      });
     });
 
-    let output = "";
+    if (!claudeInstalled) {
+      sendStep(1, "failed", "Claude Code CLI not found in PATH.");
+      sendEvent("fix", { step: 1, message: "Install Claude Code CLI: npm install -g @anthropic-ai/claude-code" });
+      res.end();
+      return true;
+    }
+    sendStep(1, "passed", `Claude CLI found at ${claudeInstalled}`);
 
-    child.stdout.on("data", (chunk) => {
-      const text = chunk.toString();
-      output += text;
-      const lines = text.split(/\r?\n/).filter(Boolean);
-      for (const line of lines) {
-        log(CAT, "[mcp-connect stdout]", line.slice(0, 200));
-        sendEvent("progress", line.slice(0, 200));
-      }
+    // ── Step 2: Check MCP servers ─────────────────────────────────────
+    sendStep(2, "running", "Checking MCP server configuration...");
+    const mcpList = await new Promise((resolve) => {
+      execFile("claude", ["mcp", "list"], {
+        timeout: 10000, encoding: "utf-8",
+      }, (err, stdout) => resolve(err ? "" : stdout));
     });
 
-    child.stderr.on("data", (chunk) => {
-      const text = chunk.toString();
-      const lines = text.split(/\r?\n/).filter(Boolean);
-      for (const line of lines) {
-        log(CAT, "[mcp-connect stderr]", line.slice(0, 200));
-        // Auth URLs or prompts show up in stderr
-        if (line.includes("http") || line.includes("auth") || line.includes("browser")) {
-          sendEvent("auth_action", line);
-        }
-        sendEvent("progress", line.slice(0, 200));
-      }
-    });
+    const hasGcalMcp = mcpList.toLowerCase().includes("google") && mcpList.toLowerCase().includes("calendar");
+    if (!hasGcalMcp) {
+      sendStep(2, "failed", "Google Calendar MCP server not found.");
+      sendEvent("fix", { step: 2, message: "Add the Google Calendar MCP server to Claude. Run: claude mcp add google-calendar", command: "claude mcp add google-calendar" });
+      res.end();
+      return true;
+    }
+    sendStep(2, "passed", "Google Calendar MCP server is configured.");
 
-    child.on("close", (code) => {
-      log(CAT, `mcp-connect exited with code ${code}`);
-      const lower = output.toLowerCase();
+    // ── Step 3: Test calendar access ──────────────────────────────────
+    sendStep(3, "running", "Testing Google Calendar access (this may open a browser for sign-in)...");
 
-      // Detect specific error conditions from Claude's output
-      if (lower.includes("insufficient") && lower.includes("scope")) {
-        sendEvent("error", "Insufficient OAuth scopes. Disconnect Google Calendar in Claude's MCP settings, then reconnect and grant all requested Calendar permissions.");
-        res.end();
-        return;
-      }
-      if (lower.includes("authenticate") || lower.includes("sign in") || lower.includes("authorization required")) {
-        sendEvent("error", "Google Calendar authentication required. Open Claude Code and reconnect the Google Calendar MCP server.");
-        res.end();
-        return;
-      }
-      if (lower.includes("not available") || lower.includes("no mcp") || lower.includes("tool not found") || lower.includes("not configured")) {
-        sendEvent("error", "Google Calendar MCP server is not configured in Claude. Run: claude mcp add google-calendar");
-        res.end();
-        return;
-      }
+    const testResult = await new Promise((resolve) => {
+      const child = spawn("claude", [
+        "-p",
+        "Use the gcal_list_calendars MCP tool. Return ONLY a JSON array where each element has: {\"id\": \"...\", \"summary\": \"...\", \"primary\": true/false}. No other text.",
+      ], { timeout: 120000, env: { ...process.env } });
 
-      // Try to extract calendar JSON from successful output
-      if (code === 0) {
-        try {
-          const cleaned = output.replace(/```(?:json)?\s*\n?/g, "").replace(/```\s*$/g, "");
-          const startIdx = cleaned.indexOf("[");
-          if (startIdx !== -1) {
-            let depth = 0;
-            for (let i = startIdx; i < cleaned.length; i++) {
-              if (cleaned[i] === "[") depth++;
-              if (cleaned[i] === "]") depth--;
-              if (depth === 0) {
-                const calendars = JSON.parse(cleaned.slice(startIdx, i + 1));
-                const primary = calendars.find((c) => c.primary);
-                sendEvent("done", {
-                  success: true,
-                  calendars,
-                  userEmail: primary?.summary || primary?.id || null,
-                });
-                res.end();
-                return;
-              }
-            }
+      let stdout = "";
+      let stderr = "";
+
+      child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk.toString();
+        // Stream stderr lines as progress (auth prompts show here)
+        const lines = chunk.toString().split(/\r?\n/).filter(Boolean);
+        for (const line of lines) {
+          if (line.includes("http") || line.includes("auth") || line.includes("browser") || line.includes("sign")) {
+            sendEvent("progress", line.slice(0, 200));
           }
-        } catch {}
-        // Claude returned 0 but no parseable JSON — might still be a message
-        sendEvent("done", { success: true, calendars: [], userEmail: null });
-      } else {
-        sendEvent("error", `Connection failed (exit code ${code}). Check that Claude Code CLI and Google Calendar MCP are configured.`);
+        }
+      });
+
+      child.on("close", (code) => resolve({ code, stdout, stderr }));
+      child.on("error", (err) => resolve({ code: -1, stdout: "", stderr: err.message }));
+
+      // Timeout
+      setTimeout(() => { try { child.kill(); } catch {} }, 120000);
+    });
+
+    const allOutput = testResult.stdout + testResult.stderr;
+    const lower = allOutput.toLowerCase();
+
+    // Check for scope issues
+    if (lower.includes("insufficient") && lower.includes("scope")) {
+      sendStep(3, "failed", "Insufficient OAuth scopes. Your Google account is connected but missing Calendar permissions.");
+      sendEvent("fix", {
+        step: 3,
+        message: "Reset MCP auth and reconnect with full Calendar permissions.",
+        action: "fix-scopes",
+      });
+      res.end();
+      return true;
+    }
+
+    // Check for auth needed
+    if (lower.includes("authenticate") || lower.includes("sign in") || lower.includes("authorization required") || lower.includes("credentials")) {
+      sendStep(3, "failed", "Google Calendar authentication required.");
+      sendEvent("fix", { step: 3, message: "Reset MCP auth to trigger a fresh Google sign-in.", action: "fix-scopes" });
+      res.end();
+      return true;
+    }
+
+    // Try to parse calendar list from output
+    let calendars = [];
+    try {
+      const cleaned = testResult.stdout.replace(/```(?:json)?\s*\n?/g, "").replace(/```\s*$/g, "");
+      const startIdx = cleaned.indexOf("[");
+      if (startIdx !== -1) {
+        let depth = 0;
+        for (let i = startIdx; i < cleaned.length; i++) {
+          if (cleaned[i] === "[") depth++;
+          if (cleaned[i] === "]") depth--;
+          if (depth === 0) {
+            calendars = JSON.parse(cleaned.slice(startIdx, i + 1));
+            break;
+          }
+        }
       }
-      res.end();
-    });
+    } catch {}
 
-    child.on("error", (err) => {
-      logError(CAT, "mcp-connect spawn error:", err.message);
-      sendEvent("error", err.code === "ENOENT"
-        ? "Claude Code CLI not found. Install it to enable Google Calendar sync."
-        : err.message);
-      res.end();
-    });
+    if (calendars.length > 0) {
+      const primary = calendars.find((c) => c.primary);
+      sendStep(3, "passed", `Access verified. Found ${calendars.length} calendar(s).`);
 
-    // Timeout handler
-    const timeout = setTimeout(() => {
-      try { child.kill(); } catch {}
-      sendEvent("error", "Connection timed out (2 minutes). Please try again.");
-      res.end();
-    }, 120000);
+      // ── Step 4: Done ──────────────────────────────────────────────────
+      sendStep(4, "passed", "Google Calendar connected successfully!");
+      sendEvent("done", {
+        success: true,
+        calendars,
+        userEmail: primary?.summary || primary?.id || null,
+      });
+    } else {
+      // Claude returned something but we couldn't parse calendars
+      sendStep(3, "failed", "Could not retrieve calendar list.");
+      sendEvent("fix", {
+        step: 3,
+        message: allOutput.slice(0, 300) || "Unknown error. Check Claude Code MCP configuration.",
+        raw: true,
+      });
+    }
 
-    child.on("close", () => clearTimeout(timeout));
-
+    res.end();
     return true;
   }
 

@@ -56,14 +56,32 @@ interface McpStatus {
   error: string | null;
 }
 
+interface PipelineStep {
+  step: number;
+  status: "pending" | "running" | "passed" | "failed";
+  detail: string;
+}
+
+interface PipelineFix {
+  step: number;
+  message: string;
+  action?: string;
+  command?: string;
+  raw?: boolean;
+}
+
 function GoogleCalendarMcpCard() {
   const [status, setStatus] = useState<McpStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
   const [pulling, setPulling] = useState(false);
   const [pullResult, setPullResult] = useState<string | null>(null);
-  const [progress, setProgress] = useState<string[]>([]);
+  const [steps, setSteps] = useState<PipelineStep[]>([]);
+  const [fix, setFix] = useState<PipelineFix | null>(null);
+  const [fixRunning, setFixRunning] = useState(false);
   const progressRef = useRef<HTMLDivElement>(null);
+
+  const STEP_LABELS = ["", "Claude CLI", "MCP Server", "Calendar Access", "Connected"];
 
   const checkStatus = useCallback(() => {
     fetch("/api/calendar/mcp-status")
@@ -77,7 +95,8 @@ function GoogleCalendarMcpCard() {
 
   const handleConnect = async () => {
     setConnecting(true);
-    setProgress([]);
+    setSteps([]);
+    setFix(null);
 
     try {
       const resp = await fetch("/api/calendar/mcp-connect", { method: "POST" });
@@ -85,7 +104,7 @@ function GoogleCalendarMcpCard() {
 
       if (!contentType.includes("text/event-stream")) {
         const data = await resp.json();
-        setProgress((p) => [...p, data.error || "Connection failed"]);
+        setSteps([{ step: 1, status: "failed", detail: data.error || "Connection failed" }]);
         setConnecting(false);
         return;
       }
@@ -107,26 +126,64 @@ function GoogleCalendarMcpCard() {
           try {
             const evt = JSON.parse(dataLine.slice(6));
 
-            if (evt.type === "progress") {
-              setProgress((p) => [...p, evt.data]);
+            if (evt.type === "step") {
+              setSteps((prev) => {
+                const existing = prev.findIndex((s) => s.step === evt.step);
+                const updated = { step: evt.step, status: evt.status, detail: evt.detail };
+                if (existing >= 0) {
+                  const copy = [...prev];
+                  copy[existing] = updated;
+                  return copy;
+                }
+                return [...prev, updated];
+              });
               setTimeout(() => progressRef.current?.scrollTo({ top: progressRef.current.scrollHeight }), 0);
-            } else if (evt.type === "auth_action") {
-              setProgress((p) => [...p, `Auth: ${evt.data}`]);
-            } else if (evt.type === "done") {
-              if (evt.data?.success) {
-                setProgress((p) => [...p, "Connected successfully!"]);
-                checkStatus();
-              }
-            } else if (evt.type === "error") {
-              setProgress((p) => [...p, `Error: ${evt.data}`]);
+            } else if (evt.type === "fix") {
+              setFix(evt.data);
+            } else if (evt.type === "progress") {
+              // Append as a detail update to the current running step
+              setSteps((prev) => {
+                const running = prev.findIndex((s) => s.status === "running");
+                if (running >= 0) {
+                  const copy = [...prev];
+                  copy[running] = { ...copy[running], detail: evt.data };
+                  return copy;
+                }
+                return prev;
+              });
+            } else if (evt.type === "done" && evt.data?.success) {
+              checkStatus();
             }
           } catch {}
         }
       }
     } catch (err: any) {
-      setProgress((p) => [...p, err.message || "Connection failed"]);
+      setSteps((prev) => [...prev, { step: 0, status: "failed", detail: err.message || "Connection failed" }]);
     } finally {
       setConnecting(false);
+    }
+  };
+
+  const handleFix = async (action?: string, command?: string) => {
+    if (action === "fix-scopes") {
+      setFixRunning(true);
+      try {
+        const resp = await fetch("/api/calendar/mcp-connect", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "fix-scopes" }),
+        });
+        const data = await resp.json();
+        setFix({ step: 0, message: data.message || "Done. Try connecting again." });
+      } catch {
+        setFix({ step: 0, message: "Fix failed. Run 'claude mcp reset-auth google-calendar' manually." });
+      } finally {
+        setFixRunning(false);
+      }
+    } else if (command) {
+      // Copy command to clipboard
+      navigator.clipboard?.writeText(command);
+      setFix((f) => f ? { ...f, message: `${f.message} (copied to clipboard)` } : null);
     }
   };
 
@@ -151,6 +208,13 @@ function GoogleCalendarMcpCard() {
       setPulling(false);
       setTimeout(() => setPullResult(null), 8000);
     }
+  };
+
+  const stepIcon = (s: PipelineStep) => {
+    if (s.status === "running") return <Loader2 size={12} className="animate-spin text-blue-400" />;
+    if (s.status === "passed") return <CheckCircle size={12} className="text-green-400" />;
+    if (s.status === "failed") return <AlertCircle size={12} className="text-red-400" />;
+    return <div className="w-3 h-3 rounded-full border border-[var(--border)]" />;
   };
 
   return (
@@ -189,10 +253,10 @@ function GoogleCalendarMcpCard() {
         </div>
 
         {/* Not connected: show connect button */}
-        {!loading && !status?.available && (
+        {!loading && !status?.available && steps.length === 0 && (
           <div className="space-y-2">
             <p className="text-xs text-[var(--text-muted)]">
-              Connect your Google Calendar to sync events with Open Canvas. Claude handles authentication — a browser window will open for Google sign-in.
+              Connect your Google Calendar to sync events with Open Canvas. Claude handles authentication automatically.
             </p>
             <button
               onClick={handleConnect}
@@ -205,15 +269,60 @@ function GoogleCalendarMcpCard() {
           </div>
         )}
 
-        {/* Connection progress log */}
-        {progress.length > 0 && (
-          <div
-            ref={progressRef}
-            className="p-2 rounded bg-[var(--bg-primary)] border border-[var(--border)] max-h-[140px] overflow-y-auto"
-          >
-            {progress.map((line, i) => (
-              <p key={i} className="text-[10px] font-mono text-[var(--text-muted)] leading-relaxed whitespace-pre-wrap break-all">{line}</p>
+        {/* Pipeline steps */}
+        {steps.length > 0 && (
+          <div ref={progressRef} className="space-y-1.5 bg-[var(--bg-primary)] rounded-lg p-3 border border-[var(--border)]">
+            {steps.map((s) => (
+              <div key={s.step} className="flex items-start gap-2">
+                <div className="mt-0.5 shrink-0">{stepIcon(s)}</div>
+                <div className="min-w-0">
+                  <p className={`text-xs font-medium ${
+                    s.status === "passed" ? "text-green-400" :
+                    s.status === "failed" ? "text-red-400" :
+                    s.status === "running" ? "text-blue-400" :
+                    "text-[var(--text-muted)]"
+                  }`}>
+                    {STEP_LABELS[s.step] || `Step ${s.step}`}
+                  </p>
+                  <p className="text-[10px] text-[var(--text-muted)] break-all">{s.detail}</p>
+                </div>
+              </div>
             ))}
+          </div>
+        )}
+
+        {/* Fix suggestion */}
+        {fix && (
+          <div className="bg-yellow-500/5 border border-yellow-500/20 rounded-lg p-3 space-y-2">
+            <p className="text-xs text-yellow-300">{fix.message}</p>
+            <div className="flex gap-2">
+              {fix.action && (
+                <button
+                  onClick={() => handleFix(fix.action)}
+                  disabled={fixRunning}
+                  className="flex items-center gap-1 px-3 py-1.5 text-xs rounded bg-yellow-500/20 text-yellow-300 hover:bg-yellow-500/30 transition-colors disabled:opacity-50"
+                >
+                  {fixRunning ? <Loader2 size={10} className="animate-spin" /> : <RefreshCw size={10} />}
+                  Fix Automatically
+                </button>
+              )}
+              {fix.command && (
+                <button
+                  onClick={() => handleFix(undefined, fix.command)}
+                  className="flex items-center gap-1 px-3 py-1.5 text-xs rounded bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
+                >
+                  Copy Command
+                </button>
+              )}
+              <button
+                onClick={handleConnect}
+                disabled={connecting}
+                className="flex items-center gap-1 px-3 py-1.5 text-xs rounded bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors disabled:opacity-50"
+              >
+                {connecting ? <Loader2 size={10} className="animate-spin" /> : null}
+                Retry
+              </button>
+            </div>
           </div>
         )}
 
@@ -227,6 +336,14 @@ function GoogleCalendarMcpCard() {
             >
               {pulling ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
               Pull Events from Google
+            </button>
+            <button
+              onClick={handleConnect}
+              disabled={connecting}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-[var(--bg-primary)] border border-[var(--border)] hover:border-[var(--accent)] transition-colors disabled:opacity-50"
+            >
+              {connecting ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+              Re-check Connection
             </button>
             {pullResult && (
               <span className="text-xs text-[var(--text-muted)]">{pullResult}</span>
