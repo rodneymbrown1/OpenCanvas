@@ -70,7 +70,11 @@ anywhere in the OC tree to fulfill the request.
 
 ## How to Find Things
 - List all projects: \`cat ~/.open-canvas/global.yaml\` (look at the \`projects:\` array)
+- List project groups: same file, look at the \`groups:\` array (each group has id, name, color, projectPaths)
+- Kanban board: same file → \`kanban: { todo, in-progress, done }\` — each column has KanbanItem[] with type+id
 - Find a specific project: parse the projects array for matching name
+- Find which group a project is in: check groups[].projectPaths for the project's path
+- Find project/group kanban status: check which column of kanban[].items contains the project path or group id
 - Read project conventions: \`cat <project-path>/.open-canvas/skills.md\`
 - Read project architecture: \`cat <project-path>/.open-canvas/PROJECT.md\`
 - Check how to run a project: \`cat <project-path>/skills/run_app.md\`
@@ -98,6 +102,8 @@ You handle ANY voice request. Your capabilities include:
 - **Ports** — Check what's running on ports, kill processes
 - **Settings** — Configure Open Canvas preferences
 - **Usage** — Review token usage and costs
+- **Kanban** — Update project/group board status (todo / in-progress / done)
+- **Project Groups** — Organize projects into named groups, move projects between groups
 
 For coding tasks, always \`cd\` into the project directory first and read
 \`.open-canvas/skills.md\` for that project's conventions before making changes.
@@ -266,6 +272,7 @@ git status                      # Git state
 - Project names become URL-safe slugs (lowercase, hyphens)
 - Always confirm the created project path to the user
 - If the user asks to "open" or "switch to" a project, find it in global.yaml and report its path
+- For group operations (move to group, create group, list by group) — see the project-groups skill
 `,
 
   workspace: `# Workspace / Coding
@@ -419,6 +426,132 @@ Global config is at \`~/.open-canvas/global.yaml\` — contains registered proje
 ## Rules
 - Explain what a setting does before changing it
 - Confirm the change after applying it
+`,
+
+  kanban: `# Kanban Board
+
+## When This Applies
+User says "mark X as done", "X is done", "start working on X", "X is in progress",
+"add X to the board", "move X to [column]", "what's on the board",
+"update project status", "show me what's in progress".
+
+## Data Model
+The kanban board has 3 columns: **todo**, **in-progress**, **done**.
+Each item has a \`type\` ("project" or "group") and an \`id\` (project path or group UUID).
+
+Key design: a project and its containing group can BOTH appear on the board as separate items
+with independent statuses. This is intentional — they are orthogonal states.
+
+## View Current Board
+\`\`\`bash
+curl http://localhost:3001/api/projects
+# Look at "kanban": { "todo": [...], "in-progress": [...], "done": [...] }
+# Each item: { "type": "project"|"group", "id": "/path" or "uuid" }
+\`\`\`
+
+## Add / Move to Column
+\`\`\`bash
+# Add or move a project to in-progress
+curl -X POST http://localhost:3001/api/projects \\
+  -H 'Content-Type: application/json' \\
+  -d '{"action":"kanban-set","type":"project","id":"/path/to/project","status":"in-progress"}'
+
+# Add a group to done
+curl -X POST http://localhost:3001/api/projects \\
+  -H 'Content-Type: application/json' \\
+  -d '{"action":"kanban-set","type":"group","id":"<group-uuid>","status":"done"}'
+\`\`\`
+Note: a project/group can only be in ONE column. Moving it automatically removes it from its previous column.
+
+## Remove From Board
+\`\`\`bash
+curl -X POST http://localhost:3001/api/projects \\
+  -H 'Content-Type: application/json' \\
+  -d '{"action":"kanban-set","type":"project","id":"/path/to/project","status":null}'
+\`\`\`
+
+## Find IDs
+- Project paths: \`cat ~/.open-canvas/global.yaml\` → \`projects[].path\`
+- Group IDs: same file → \`groups[].id\` and \`groups[].name\`
+
+## Status Values
+- \`"todo"\` — not started
+- \`"in-progress"\` — currently being worked on
+- \`"done"\` — completed / shipped
+
+## Rules
+- "mark X as done" / "X is done" / "finish X" → status: "done"
+- "I'm starting X" / "working on X" / "X is in progress" → status: "in-progress"
+- "add X to the board" (no status specified) → default to "todo"
+- "move X to [column]" → set the appropriate status
+- Match project/group names case-insensitively
+- When reporting board state, list all 3 columns with their items by name (not raw paths)
+`,
+
+  "project-groups": `# Project Groups
+
+## When This Applies
+User mentions grouping projects, moving a project to a group, creating a group, asking which
+group a project is in, or organizing projects into categories.
+
+## Data Model
+Groups are stored in \`~/.open-canvas/global.yaml\` under the \`groups:\` key.
+Each group has: id, name, color (hex), projectPaths (array of absolute paths).
+Projects themselves remain flat in the \`projects:\` array — groups just reference paths.
+
+## How to Do It
+
+### List All Groups (and which projects are in them)
+\`\`\`bash
+curl http://localhost:3001/api/projects
+# Look at the "groups" array in the response
+\`\`\`
+Or directly: \`cat ~/.open-canvas/global.yaml\` and read the \`groups:\` array.
+
+### Create a New Group
+\`\`\`bash
+curl -X POST http://localhost:3001/api/projects \\
+  -H 'Content-Type: application/json' \\
+  -d '{"action":"create-group","name":"Clients","color":"#22c55e"}'
+\`\`\`
+
+### Add a Project to a Group
+First find the group's id (from \`curl /api/projects\`), then:
+\`\`\`bash
+curl -X POST http://localhost:3001/api/projects \\
+  -H 'Content-Type: application/json' \\
+  -d '{"action":"add-to-group","groupId":"<id>","projectPath":"/path/to/project"}'
+\`\`\`
+Note: a project can only be in ONE group. Adding it to a new group automatically removes it from any previous group.
+
+### Remove a Project from Its Group (ungroup)
+\`\`\`bash
+curl -X POST http://localhost:3001/api/projects \\
+  -H 'Content-Type: application/json' \\
+  -d '{"action":"remove-from-group","groupId":"<id>","projectPath":"/path/to/project"}'
+\`\`\`
+
+### Rename or Recolor a Group
+\`\`\`bash
+curl -X POST http://localhost:3001/api/projects \\
+  -H 'Content-Type: application/json' \\
+  -d '{"action":"update-group","groupId":"<id>","name":"New Name","color":"#6366f1"}'
+\`\`\`
+
+### Delete a Group
+\`\`\`bash
+curl -X POST http://localhost:3001/api/projects \\
+  -H 'Content-Type: application/json' \\
+  -d '{"action":"delete-group","groupId":"<id>"}'
+\`\`\`
+Projects in the group are NOT deleted — they just become ungrouped.
+
+## Rules
+- When the user says "put X in the Y group" or "move X to Y" — find the project path from global.yaml, find the group id, then call add-to-group
+- When the user says "create a group called X" — call create-group with a reasonable color
+- When listing projects, mention their group (if any) so the user understands the organization
+- If the group doesn't exist yet, offer to create it first, then add the project
+- Always confirm what group the project ended up in
 `,
 
   usage: `# Usage & Cost Tracking

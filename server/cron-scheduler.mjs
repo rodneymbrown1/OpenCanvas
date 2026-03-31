@@ -125,8 +125,32 @@ function addNotification(eventId, title, message) {
     read: false,
   });
 
-  writeYaml(NOTIFICATIONS_PATH, { notifications });
+  // Prune old read notifications — keep at most 50 to prevent unbounded growth
+  const unread = notifications.filter((n) => !n.read);
+  const read = notifications
+    .filter((n) => n.read)
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+    .slice(0, 50);
+
+  writeYaml(NOTIFICATIONS_PATH, { notifications: [...unread, ...read] });
   log("cron", ` notification: ${title}`);
+}
+
+/** Mark all unread notifications for an event as read (called before adding completion notification) */
+function dismissNotificationsForEvent(eventId) {
+  const data = readYaml(NOTIFICATIONS_PATH) || { notifications: [] };
+  const notifications = data.notifications || [];
+  let changed = false;
+  for (const n of notifications) {
+    if (n.eventId === eventId && !n.read) {
+      n.read = true;
+      changed = true;
+    }
+  }
+  if (changed) {
+    writeYaml(NOTIFICATIONS_PATH, { notifications });
+    log("cron", ` auto-dismissed prior notifications for event ${eventId}`);
+  }
 }
 
 // ── Event Update ─────────────────────────────────────────────────────────────
@@ -354,6 +378,8 @@ function executeJob(event) {
                 ? "completed"
                 : `failed (exit ${result.exitCode})`;
 
+            // Auto-dismiss "started" notification before adding the completion one
+            dismissNotificationsForEvent(event.id);
             addNotification(
               event.id,
               `Task ${statusLabel}: ${event.title}`,
@@ -420,6 +446,7 @@ function executeJob(event) {
         const endedAt = new Date().toISOString();
         const durationMs = Date.now() - new Date(cmdStart).getTime();
 
+        dismissNotificationsForEvent(event.id);
         if (err) {
           logError("cron", ` command failed for ${event.id}:`, err.message);
           const execution = {
@@ -559,12 +586,30 @@ function startWatcher() {
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
+function recoverStuckRunningEvents() {
+  const data = readYaml(CALENDAR_PATH);
+  if (!data?.events) return;
+  let changed = false;
+  for (const event of data.events) {
+    if (event.status === "running") {
+      log("cron", ` recovery: resetting stuck "running" event ${event.id} (${event.title}) → pending`);
+      event.status = "pending";
+      event.updatedAt = new Date().toISOString();
+      changed = true;
+    }
+  }
+  if (changed) writeYaml(CALENDAR_PATH, data);
+}
+
 export function initCronScheduler(onSpawnSession) {
   spawnSessionCallback = onSpawnSession || null;
   log("cron", " initializing...");
 
   // Ensure calendar directory exists
   fs.mkdirSync(CALENDAR_DIR, { recursive: true });
+
+  // Recovery: reset any events that were left "running" when the server last stopped
+  recoverStuckRunningEvents();
 
   // Initial sync
   syncJobs();
@@ -602,4 +647,24 @@ export function getCronStatus() {
 export function triggerEventNow(event) {
   log("cron", ` manual trigger: ${event.id} — ${event.title}`);
   executeJob(event);
+}
+
+/**
+ * Trigger an ad-hoc agent session outside the cron pipeline.
+ * opts: { agent, cwd, prompt, timeout?, onComplete? }
+ * Used by calendar-connections for push-to-Google tasks.
+ * Throws if pty-server has not yet registered a spawn callback.
+ */
+export function triggerAgentSession(opts) {
+  if (!spawnSessionCallback) {
+    throw new Error("triggerAgentSession: no spawn callback registered — pty-server not fully initialized");
+  }
+  log("cron", `triggerAgentSession: agent=${opts.agent || "claude"} cwd=${opts.cwd || OC_HOME}`);
+  spawnSessionCallback({
+    agent: opts.agent || "claude",
+    cwd: opts.cwd || OC_HOME,
+    prompt: opts.prompt,
+    timeout: opts.timeout || AGENT_SESSION_TIMEOUT_MS,
+    onComplete: opts.onComplete || null,
+  });
 }

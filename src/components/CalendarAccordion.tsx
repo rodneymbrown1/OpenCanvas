@@ -106,8 +106,13 @@ function MiniEvent({ event }: { event: CalendarEvent }) {
 
 // ── Accordion Component ──────────────────────────────────────────────────────
 
-export function CalendarAccordion() {
-  const [expanded, setExpanded] = useState(true);
+interface CalendarAccordionProps {
+  defaultOpen?: boolean;
+  onToggle?: (open: boolean) => void;
+}
+
+export function CalendarAccordion({ defaultOpen = true, onToggle }: CalendarAccordionProps = {}) {
+  const [expanded, setExpanded] = useState(defaultOpen);
   const { events, loading } = useCalendar();
   const { setView } = useView();
 
@@ -136,7 +141,11 @@ export function CalendarAccordion() {
     <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-lg overflow-hidden">
       {/* Header */}
       <button
-        onClick={() => setExpanded(!expanded)}
+        onClick={() => {
+          const next = !expanded;
+          setExpanded(next);
+          onToggle?.(next);
+        }}
         className="w-full flex items-center gap-2 px-3 py-2.5 hover:bg-[var(--bg-tertiary)] transition-colors"
       >
         {expanded ? (

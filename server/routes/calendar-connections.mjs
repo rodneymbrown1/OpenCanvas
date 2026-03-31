@@ -8,6 +8,8 @@
 // Actual Google Calendar API calls happen through Claude Code's MCP tools.
 
 import { execFile } from "child_process";
+import path from "node:path";
+import { triggerAgentSession } from "../cron-scheduler.mjs";
 import {
   listConnections,
   addConnection,
@@ -26,6 +28,8 @@ import {
 } from "../../src/lib/calendarConfig.js";
 
 const CAT = "calendar";
+const HOME = process.env.HOME || process.env.USERPROFILE || "/tmp";
+const OC_HOME = path.join(HOME, ".open-canvas");
 
 // ── Auto-sync helpers ──────────────────────────────────────────────────────────
 
@@ -103,13 +107,18 @@ function normalizeDateTime(value) {
 
 /**
  * Upsert an array of Google Calendar events into local calendar.yaml.
- * Returns { pulled, updated, errors[], total }.
+ * If `window` is provided ({ timeMin, timeMax } as ISO strings), local events
+ * in that range whose googleCalendarId is absent from the incoming set are
+ * soft-deleted (status → "cancelled") to mirror deletions made in Google.
+ * Returns { pulled, updated, deleted, errors[], total }.
  */
-function upsertGoogleEvents(remoteEvents) {
+function upsertGoogleEvents(remoteEvents, window = null) {
   const localEvents = readEvents();
   let pulled = 0;
   let updated = 0;
+  let deleted = 0;
   const errors = [];
+  const seenRefs = new Set();
 
   for (const remote of remoteEvents) {
     try {
@@ -134,6 +143,7 @@ function upsertGoogleEvents(remoteEvents) {
       log(CAT, `gcal-import: "${title}" id=${remoteId} start=${startTime} allDay=${allDay}`);
 
       const externalRef = `mcp:${remoteId}`;
+      seenRefs.add(externalRef);
       const existing = localEvents.find((e) => e.googleCalendarId === externalRef);
 
       if (existing) {
@@ -167,8 +177,27 @@ function upsertGoogleEvents(remoteEvents) {
     }
   }
 
-  logError(CAT, `gcal-import complete: ${pulled} new, ${updated} updated, ${errors.length} errors / ${remoteEvents.length} total`);
-  return { pulled, updated, errors, total: remoteEvents.length };
+  // Soft-delete local events that were removed from Google Calendar.
+  // Only runs when the caller provides the time window that was queried.
+  if (window?.timeMin && window?.timeMax) {
+    const windowStart = new Date(window.timeMin).getTime();
+    const windowEnd   = new Date(window.timeMax).getTime();
+    // Re-read after upserts so we see the freshest state
+    const freshLocal = readEvents();
+    for (const local of freshLocal) {
+      if (!local.googleCalendarId?.startsWith("mcp:")) continue;
+      if (local.status === "cancelled") continue;
+      if (seenRefs.has(local.googleCalendarId)) continue;
+      const evStart = local.startTime ? new Date(local.startTime).getTime() : null;
+      if (evStart === null || evStart < windowStart || evStart > windowEnd) continue;
+      updateCalendarEvent(local.id, { status: "cancelled" });
+      log(CAT, `gcal-import: soft-deleted "${local.title}" (${local.googleCalendarId}) — absent from Google response`);
+      deleted++;
+    }
+  }
+
+  log(CAT, `gcal-import complete: ${pulled} new, ${updated} updated, ${deleted} deleted, ${errors.length} errors / ${remoteEvents.length} total`);
+  return { pulled, updated, deleted, errors, total: remoteEvents.length };
 }
 
 // ── Route handler ──────────────────────────────────────────────────────────────
@@ -237,7 +266,7 @@ export async function handle(req, res, url) {
   // fetches events via mcp__claude_ai_Google_Calendar__gcal_list_events.
   if (pathname === "/api/calendar/gcal-import" && method === "POST") {
     const body = await parseBody(req);
-    logError(CAT, `gcal-import: received request with ${body.events?.length ?? 0} events`);
+    log(CAT, `gcal-import: received request with ${body.events?.length ?? 0} events`);
 
     if (!body.events || !Array.isArray(body.events)) {
       logError(CAT, `gcal-import: invalid body — events field missing or not array`);
@@ -246,14 +275,17 @@ export async function handle(req, res, url) {
     }
 
     if (body.events.length === 0) {
-      jsonResponse(res, { pulled: 0, updated: 0, errors: [], total: 0 });
+      jsonResponse(res, { pulled: 0, updated: 0, deleted: 0, errors: [], total: 0 });
       return true;
     }
 
     // Log first event for debugging
-    logError(CAT, `gcal-import: first event sample: ${JSON.stringify(body.events[0]).slice(0, 500)}`);
+    log(CAT, `gcal-import: first event sample: ${JSON.stringify(body.events[0]).slice(0, 500)}`);
 
-    const result = upsertGoogleEvents(body.events);
+    const window = (body.timeMin && body.timeMax)
+      ? { timeMin: body.timeMin, timeMax: body.timeMax }
+      : null;
+    const result = upsertGoogleEvents(body.events, window);
 
     // Update connection sync state if we have one
     const conn = findMcpConnection(body.agent || null);
@@ -284,7 +316,7 @@ export async function handle(req, res, url) {
     const calendars = body.calendars || [];
     const userEmail = body.userEmail || "";
 
-    logError(CAT, `gcal-connect: agent=${agent} email=${userEmail} calendars=${calendars.length}`);
+    log(CAT, `gcal-connect: agent=${agent} email=${userEmail} calendars=${calendars.length}`);
 
     const credentialData = {
       auth_method: "mcp",
@@ -300,7 +332,7 @@ export async function handle(req, res, url) {
     const existing = findMcpConnection(agent);
     if (existing) {
       updateConnection(existing.id, { credentials: credentialData, enabled: true });
-      logError(CAT, `gcal-connect: updated connection ${existing.id}`);
+      log(CAT, `gcal-connect: updated connection ${existing.id}`);
       jsonResponse(res, { connectionId: existing.id, action: "updated" });
     } else {
       const conn = addConnection("google", credentialData, {
@@ -308,7 +340,7 @@ export async function handle(req, res, url) {
         calendars: ["primary"],
         conflict_resolution: "newest-wins",
       });
-      logError(CAT, `gcal-connect: created connection ${conn.id}`);
+      log(CAT, `gcal-connect: created connection ${conn.id}`);
       jsonResponse(res, { connectionId: conn.id, action: "created" });
     }
     return true;
@@ -378,7 +410,7 @@ export async function handle(req, res, url) {
       return true;
     }
 
-    logError(CAT, `gcal-link: ${localEventId} → ${gcalId}`);
+    log(CAT, `gcal-link: ${localEventId} → ${gcalId}`);
     jsonResponse(res, { linked: true, googleCalendarId: gcalId });
     return true;
   }
@@ -564,6 +596,82 @@ export async function handle(req, res, url) {
     }
 
     jsonResponse(res, { error: "action required (update|remove)" }, 400);
+    return true;
+  }
+
+  // ── POST /api/calendar/gcal-push ──────────────────────────────────────
+  // Spawns a Claude Code agent session that calls gcal_create_event (or
+  // gcal_update_event for existing synced events) and then POST
+  // /api/calendar/gcal-link to persist the returned Google event ID.
+  if (pathname === "/api/calendar/gcal-push" && method === "POST") {
+    const body = await parseBody(req);
+    const { eventId } = body;
+
+    if (!eventId) {
+      jsonResponse(res, { error: "eventId required" }, 400);
+      return true;
+    }
+
+    const event = getEventById(eventId);
+    if (!event) {
+      jsonResponse(res, { error: "Event not found" }, 404);
+      return true;
+    }
+
+    // Resolve the target Google Calendar ID from the connection record
+    const conn = findMcpConnection(body.agent || null);
+    if (!conn) {
+      jsonResponse(res, { error: "No Google Calendar connection found. Connect Google Calendar first." }, 400);
+      return true;
+    }
+
+    let calendarId = "primary";
+    try {
+      const calendars = JSON.parse(conn.credentials?.calendars_json || "[]");
+      const primary = calendars.find((c) => c.primary);
+      if (primary?.id) calendarId = primary.id;
+    } catch {}
+
+    const agent = conn.credentials?.agent || "claude";
+
+    // Build a precise prompt so Claude calls the right MCP tool and links back
+    const isUpdate = event.googleCalendarId?.startsWith("mcp:");
+    const remoteEventId = isUpdate ? event.googleCalendarId.split(":")[1] : null;
+
+    const toolCall = isUpdate
+      ? `gcal_update_event with calendarId="${calendarId}", eventId="${remoteEventId}"`
+      : `gcal_create_event with calendarId="${calendarId}"`;
+
+    const eventFields = [
+      `summary: "${event.title.replace(/"/g, '\\"')}"`,
+      event.description ? `description: "${event.description.replace(/"/g, '\\"')}"` : null,
+      event.allDay
+        ? `start: {date: "${event.startTime.split("T")[0]}"}, end: {date: "${(event.endTime || event.startTime).split("T")[0]}"}`
+        : `start: {dateTime: "${event.startTime}"}, end: {dateTime: "${event.endTime || event.startTime}"}`,
+    ].filter(Boolean).join(", ");
+
+    const linkBack = isUpdate
+      ? `(already linked — no gcal-link call needed)`
+      : `Then immediately POST http://localhost:3001/api/calendar/gcal-link with body: {"localEventId":"${eventId}","googleEventId":"<id from the MCP response>"}`;
+
+    const prompt = [
+      `Push an Open Canvas calendar event to Google Calendar.`,
+      ``,
+      `Step 1: Call ${toolCall} with these fields: ${eventFields}`,
+      `Step 2: ${linkBack}`,
+      `Step 3: Reply "Push complete: <googleEventId>" or describe any error.`,
+      ``,
+      `Do not ask questions. Execute all steps now.`,
+    ].join("\n");
+
+    try {
+      triggerAgentSession({ agent, cwd: OC_HOME, prompt });
+      log(CAT, `gcal-push: agent session queued for event ${eventId} (${isUpdate ? "update" : "create"})`);
+      jsonResponse(res, { queued: true, eventId, agent, operation: isUpdate ? "update" : "create" });
+    } catch (err) {
+      logError(CAT, `gcal-push: failed to spawn session: ${err.message}`);
+      jsonResponse(res, { error: `Could not start push session: ${err.message}` }, 503);
+    }
     return true;
   }
 

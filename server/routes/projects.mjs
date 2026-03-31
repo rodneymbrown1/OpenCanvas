@@ -8,6 +8,15 @@ import {
   registerProject,
   removeProject,
   listSharedData,
+  listGroups,
+  createGroup,
+  updateGroup,
+  deleteGroup,
+  addProjectToGroup,
+  removeProjectFromGroup,
+  getKanban,
+  setKanbanItemStatus,
+  reorderKanbanColumn,
   OC_HOME,
 } from "../../src/lib/globalConfig.js";
 import { RunConfigManager } from "../../src/lib/core/RunConfigManager.js";
@@ -150,12 +159,17 @@ export function handle(req, res, url) {
       : [];
     const sharedData = configured ? listSharedData() : [];
 
+    const groups = configured ? listGroups() : [];
+    const kanban = configured ? getKanban() : { todo: [], "in-progress": [], done: [] };
+
     json(res, {
       configured,
       home: configured ? config?.open_canvas_home : OC_HOME,
       sharedDataDir: config?.shared_data_dir || "",
       projects,
       sharedData,
+      groups,
+      kanban,
       defaults: config?.defaults || {},
     });
     return true;
@@ -246,9 +260,107 @@ export function handle(req, res, url) {
           return;
         }
 
+        // Create group
+        if (body.action === "create-group") {
+          if (!body.name) {
+            json(res, { error: "name required" }, 400);
+            return;
+          }
+          const group = createGroup(body.name, body.color);
+          json(res, { group });
+          return;
+        }
+
+        // Update group (rename / recolor)
+        if (body.action === "update-group") {
+          if (!body.groupId) {
+            json(res, { error: "groupId required" }, 400);
+            return;
+          }
+          const updates = {};
+          if (body.name !== undefined) updates.name = body.name;
+          if (body.color !== undefined) updates.color = body.color;
+          const group = updateGroup(body.groupId, updates);
+          if (!group) {
+            json(res, { error: "group not found" }, 404);
+            return;
+          }
+          json(res, { group });
+          return;
+        }
+
+        // Delete group
+        if (body.action === "delete-group") {
+          if (!body.groupId) {
+            json(res, { error: "groupId required" }, 400);
+            return;
+          }
+          deleteGroup(body.groupId);
+          json(res, { deleted: true });
+          return;
+        }
+
+        // Add project to group
+        if (body.action === "add-to-group") {
+          if (!body.groupId || !body.projectPath) {
+            json(res, { error: "groupId and projectPath required" }, 400);
+            return;
+          }
+          const ok = addProjectToGroup(body.groupId, body.projectPath);
+          if (!ok) {
+            json(res, { error: "group not found" }, 404);
+            return;
+          }
+          json(res, { added: true });
+          return;
+        }
+
+        // Remove project from group (ungroup)
+        if (body.action === "remove-from-group") {
+          if (!body.groupId || !body.projectPath) {
+            json(res, { error: "groupId and projectPath required" }, 400);
+            return;
+          }
+          removeProjectFromGroup(body.groupId, body.projectPath);
+          json(res, { removed: true });
+          return;
+        }
+
+        // Set kanban status (add, move, or remove an item from the board)
+        // status: "todo" | "in-progress" | "done" | null (null = remove from board)
+        if (body.action === "kanban-set") {
+          if (!body.type || !body.id) {
+            json(res, { error: "type and id required" }, 400);
+            return;
+          }
+          if (body.type !== "project" && body.type !== "group") {
+            json(res, { error: 'type must be "project" or "group"' }, 400);
+            return;
+          }
+          const validStatuses = ["todo", "in-progress", "done", null];
+          if (!validStatuses.includes(body.status ?? null)) {
+            json(res, { error: 'status must be "todo", "in-progress", "done", or null' }, 400);
+            return;
+          }
+          setKanbanItemStatus({ type: body.type, id: body.id }, body.status || null);
+          json(res, { ok: true, kanban: getKanban() });
+          return;
+        }
+
+        // Reorder items within a kanban column
+        if (body.action === "kanban-reorder") {
+          if (!body.status || body.fromIndex === undefined || body.toIndex === undefined) {
+            json(res, { error: "status, fromIndex, and toIndex required" }, 400);
+            return;
+          }
+          reorderKanbanColumn(body.status, body.fromIndex, body.toIndex);
+          json(res, { ok: true, kanban: getKanban() });
+          return;
+        }
+
         json(
           res,
-          { error: "action required (setup|register|remove|create)" },
+          { error: "action required (setup|register|remove|create|create-group|update-group|delete-group|add-to-group|remove-from-group)" },
           400
         );
       } catch (err) {

@@ -950,14 +950,27 @@ Important:
         // processing (output settles again), then send /exit to close the session.
         const COMPLETION_SETTLE_MS = 5000; // 5s of silence after processing = done
         const COMPLETION_TIMEOUT_MS = 120000; // 2 min max for voice job
+        const FORCE_KILL_GRACE_MS = 10000; // 10s after /exit before hard kill
         let completionTimer = null;
         let completionTimeout = null;
+        let forceKillTimer = null;
+
+        function scheduleForceKill() {
+          if (forceKillTimer) clearTimeout(forceKillTimer);
+          forceKillTimer = setTimeout(() => {
+            if (session.status === "running") {
+              sessionLog(session, "force-kill", "/exit ignored, hard-killing process");
+              try { ptyProcess.kill(); } catch {}
+            }
+          }, FORCE_KILL_GRACE_MS);
+        }
 
         function scheduleAutoExit() {
           completionTimeout = setTimeout(() => {
             if (session.status === "running") {
               sessionLog(session, "auto-exit-timeout", `${COMPLETION_TIMEOUT_MS / 1000}s max elapsed, sending /exit`);
               ptyProcess.write("/exit\r");
+              scheduleForceKill();
             }
           }, COMPLETION_TIMEOUT_MS);
         }
@@ -969,6 +982,7 @@ Important:
               sessionLog(session, "auto-exit", "agent output settled, sending /exit");
               if (completionTimeout) clearTimeout(completionTimeout);
               ptyProcess.write("/exit\r");
+              scheduleForceKill();
             }
           }, COMPLETION_SETTLE_MS);
         }
@@ -1029,13 +1043,15 @@ Important:
         });
 
         ptyProcess.onExit(({ exitCode }) => {
-          // Clean up auto-exit timers
+          // Clean up all timers
           if (completionTimer) clearTimeout(completionTimer);
           if (completionTimeout) clearTimeout(completionTimeout);
+          if (forceKillTimer) clearTimeout(forceKillTimer);
           session.status = exitCode === 0 ? "completed" : "failed";
           session.exitCode = exitCode;
           session.endedAt = new Date().toISOString();
           sessionLog(session, "exited", `code=${exitCode} status=${session.status}`);
+          activeProcesses.delete(session.id);
           recordSessionHistory(session);
         });
 

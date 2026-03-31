@@ -50,7 +50,15 @@ async function ensureValidToken(connection: ConnectionConfig): Promise<string> {
 
   const { access_token, refresh_token, token_expiry, client_id, client_secret } = connection.credentials;
 
-  // Check if token is expired (with 5 min buffer)
+  // MCP-managed connections route through Claude Code, not direct OAuth HTTP calls.
+  // Attempting to use "mcp-managed" as a bearer token would 401 on every request.
+  if (access_token === "mcp-managed" || refresh_token === "mcp-managed") {
+    throw new Error(
+      "MCP-managed connections use Claude Code MCP tools — use POST /api/calendar/gcal-push instead"
+    );
+  }
+
+  // Check if token is still valid (with 5 min buffer)
   if (token_expiry && new Date(token_expiry).getTime() > Date.now() + 5 * 60 * 1000) {
     return access_token;
   }
@@ -180,12 +188,11 @@ export async function syncConnection(connectionId: string): Promise<SyncReport> 
     }
   }
 
-  // Push phase
-  if (direction !== "pull-only") {
+  // Push phase — skipped on first sync (no last_sync baseline) to prevent
+  // flooding all existing local events into Google Calendar on initial connect.
+  if (direction !== "pull-only" && connection.sync_state.last_sync) {
     const localEvents = readEvents();
-    const lastSync = connection.sync_state.last_sync
-      ? new Date(connection.sync_state.last_sync).getTime()
-      : 0;
+    const lastSync = new Date(connection.sync_state.last_sync).getTime();
 
     // Find local events that need pushing
     const toPush = localEvents.filter((e) => {

@@ -167,13 +167,35 @@ export function CalendarProvider({ children }: { children: ReactNode }) {
     await fetchEvents();
   }, [checkGcalStatus, fetchEvents]);
 
-  // Push a local event to Google Calendar (via Claude Code — not directly from browser)
+  // Push a local event to Google Calendar via a Claude Code agent session.
+  // The server spawns Claude, which calls gcal_create_event MCP tool, then
+  // POST /api/calendar/gcal-link to persist the returned Google event ID.
   const pushToGoogle = useCallback(async (eventId: string): Promise<boolean> => {
-    // Server can't push to Google directly. This is a no-op placeholder.
-    // Claude Code calls gcal_create_event MCP tool then gcal-link endpoint.
-    console.log("[OC:CALENDAR] pushToGoogle: ask Claude to push event", eventId);
-    return false;
-  }, []);
+    if (!mountedRef.current) return false;
+    setSyncStatus((s) => ({ ...s, syncing: true }));
+    try {
+      const res = await fetch("/api/calendar/gcal-push", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ eventId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast(data.error || "Failed to push event to Google Calendar", { type: "error" });
+        return false;
+      }
+      toast("Sending to Google Calendar via Claude…", { type: "info" });
+      // Re-fetch after a short delay to pick up the gcal-link update
+      setTimeout(() => { if (mountedRef.current) fetchEvents(); }, 8000);
+      return true;
+    } catch (err) {
+      logger.error("calendar", "pushToGoogle failed", err);
+      toast("Failed to push event to Google Calendar", { type: "error" });
+      return false;
+    } finally {
+      if (mountedRef.current) setSyncStatus((s) => ({ ...s, syncing: false }));
+    }
+  }, [toast, fetchEvents]);
 
   // Remove a Google Calendar link from a local event
   const removeFromGoogle = useCallback(async (eventId: string): Promise<boolean> => {

@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { randomUUID } from "crypto";
 import YAML from "yaml";
 
 /** Atomic write: tmp file + rename. Crash-safe. */
@@ -18,6 +19,26 @@ export interface ProjectEntry {
   path: string;
   lastOpened?: string;
   description?: string;
+}
+
+export interface ProjectGroup {
+  id: string;
+  name: string;
+  color?: string;
+  projectPaths: string[];
+}
+
+export type KanbanStatus = "todo" | "in-progress" | "done";
+
+export interface KanbanItem {
+  type: "project" | "group";
+  id: string; // project path OR group UUID
+}
+
+export interface KanbanBoard {
+  todo: KanbanItem[];
+  "in-progress": KanbanItem[];
+  done: KanbanItem[];
 }
 
 export interface GlobalPermissions {
@@ -44,6 +65,8 @@ export interface GlobalConfig {
   app_settings: AppSettings;
   api_keys: Record<string, string>;
   projects: ProjectEntry[];
+  groups?: ProjectGroup[];
+  kanban?: KanbanBoard;
 }
 
 // ── Paths ────────────────────────────────────────────────────────────────────
@@ -77,6 +100,7 @@ const DEFAULT_GLOBAL_CONFIG: GlobalConfig = {
   app_settings: { ...DEFAULT_APP_SETTINGS },
   api_keys: {},
   projects: [],
+  groups: [],
 };
 
 // ── Read / Write ─────────────────────────────────────────────────────────────
@@ -171,6 +195,20 @@ export function registerProject(
 export function removeProject(projectPath: string): void {
   const config = readGlobalConfig();
   config.projects = config.projects.filter((p) => p.path !== projectPath);
+  // Remove from any groups
+  if (config.groups) {
+    for (const group of config.groups) {
+      group.projectPaths = group.projectPaths.filter((p) => p !== projectPath);
+    }
+  }
+  // Remove from kanban board
+  if (config.kanban) {
+    for (const col of ["todo", "in-progress", "done"] as KanbanStatus[]) {
+      config.kanban[col] = (config.kanban[col] ?? []).filter(
+        (i) => !(i.type === "project" && i.id === projectPath)
+      );
+    }
+  }
   writeGlobalConfig(config);
 }
 
@@ -335,4 +373,147 @@ export function linkGlobalToProject(fileName: string, projectDataDir: string): s
   }
 
   return targetPath;
+}
+
+// ── Project Groups ────────────────────────────────────────────────────────────
+
+export function listGroups(): ProjectGroup[] {
+  const config = readGlobalConfig();
+  return config.groups || [];
+}
+
+export function createGroup(name: string, color?: string): ProjectGroup {
+  const config = readGlobalConfig();
+  const group: ProjectGroup = {
+    id: randomUUID(),
+    name,
+    color,
+    projectPaths: [],
+  };
+  if (!config.groups) config.groups = [];
+  config.groups.push(group);
+  writeGlobalConfig(config);
+  return group;
+}
+
+export function updateGroup(
+  id: string,
+  updates: Partial<Pick<ProjectGroup, "name" | "color">>
+): ProjectGroup | null {
+  const config = readGlobalConfig();
+  if (!config.groups) return null;
+  const group = config.groups.find((g) => g.id === id);
+  if (!group) return null;
+  if (updates.name !== undefined) group.name = updates.name;
+  if (updates.color !== undefined) group.color = updates.color;
+  writeGlobalConfig(config);
+  return group;
+}
+
+export function deleteGroup(id: string): void {
+  const config = readGlobalConfig();
+  if (!config.groups) return;
+  config.groups = config.groups.filter((g) => g.id !== id);
+  // Remove from kanban board
+  if (config.kanban) {
+    for (const col of ["todo", "in-progress", "done"] as KanbanStatus[]) {
+      config.kanban[col] = (config.kanban[col] ?? []).filter(
+        (i) => !(i.type === "group" && i.id === id)
+      );
+    }
+  }
+  writeGlobalConfig(config);
+}
+
+export function addProjectToGroup(groupId: string, projectPath: string): boolean {
+  const config = readGlobalConfig();
+  if (!config.groups) return false;
+  // Remove from any other group first (a project can only be in one group)
+  for (const group of config.groups) {
+    group.projectPaths = group.projectPaths.filter((p) => p !== projectPath);
+  }
+  const target = config.groups.find((g) => g.id === groupId);
+  if (!target) return false;
+  target.projectPaths.push(projectPath);
+  writeGlobalConfig(config);
+  return true;
+}
+
+export function removeProjectFromGroup(groupId: string, projectPath: string): boolean {
+  const config = readGlobalConfig();
+  if (!config.groups) return false;
+  const group = config.groups.find((g) => g.id === groupId);
+  if (!group) return false;
+  group.projectPaths = group.projectPaths.filter((p) => p !== projectPath);
+  writeGlobalConfig(config);
+  return true;
+}
+
+// ── Kanban Board ──────────────────────────────────────────────────────────────
+
+const EMPTY_KANBAN: KanbanBoard = { todo: [], "in-progress": [], done: [] };
+const KANBAN_COLS: KanbanStatus[] = ["todo", "in-progress", "done"];
+
+/**
+ * Read the kanban board, automatically stripping stale references to
+ * projects or groups that no longer exist in the registry.
+ */
+export function getKanban(): KanbanBoard {
+  const config = readGlobalConfig();
+  const raw = config.kanban ?? EMPTY_KANBAN;
+
+  const validPaths = new Set(config.projects.map((p) => p.path));
+  const validGroupIds = new Set((config.groups ?? []).map((g) => g.id));
+
+  const clean = (items: KanbanItem[]): KanbanItem[] =>
+    (items ?? []).filter((i) =>
+      i.type === "project" ? validPaths.has(i.id) : validGroupIds.has(i.id)
+    );
+
+  return {
+    todo: clean(raw.todo),
+    "in-progress": clean(raw["in-progress"]),
+    done: clean(raw.done),
+  };
+}
+
+/**
+ * Add, move, or remove an item from the kanban board.
+ * Passing status=null removes the item from all columns.
+ * A project/group can only occupy one column at a time.
+ */
+export function setKanbanItemStatus(item: KanbanItem, status: KanbanStatus | null): void {
+  const config = readGlobalConfig();
+  if (!config.kanban) config.kanban = { ...EMPTY_KANBAN, todo: [], "in-progress": [], done: [] };
+
+  // Remove from every column first
+  for (const col of KANBAN_COLS) {
+    config.kanban[col] = (config.kanban[col] ?? []).filter(
+      (i) => !(i.type === item.type && i.id === item.id)
+    );
+  }
+
+  // Add to target column
+  if (status) {
+    config.kanban[status].push(item);
+  }
+
+  writeGlobalConfig(config);
+}
+
+/**
+ * Reorder an item within a single kanban column.
+ */
+export function reorderKanbanColumn(
+  status: KanbanStatus,
+  fromIndex: number,
+  toIndex: number
+): void {
+  const config = readGlobalConfig();
+  if (!config.kanban) return;
+  const col = config.kanban[status];
+  if (!col || fromIndex < 0 || toIndex < 0 || fromIndex >= col.length || toIndex >= col.length) return;
+  const [item] = col.splice(fromIndex, 1);
+  col.splice(toIndex, 0, item);
+  writeGlobalConfig(config);
 }
