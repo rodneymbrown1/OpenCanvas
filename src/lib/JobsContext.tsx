@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { logger } from "@/lib/logger";
+import { useToast } from "@/lib/ToastContext";
 export interface Job {
   id: string;
   agent: string;
@@ -40,6 +41,7 @@ const JobsContext = createContext<JobsContextType | null>(null);
 const jobPrompts = new Map<string, string>();
 
 export function JobsProvider({ children }: { children: ReactNode }) {
+  const { toast } = useToast();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [spawning, setSpawning] = useState(false);
 
@@ -173,6 +175,7 @@ export function JobsProvider({ children }: { children: ReactNode }) {
         fetchJobs();
       } catch (err) {
         logger.error("context", "VoiceJob: failed to spawn", err);
+        toast("Voice job failed to start", { type: "error" });
         setSpawning(false);
       }
     },

@@ -3,6 +3,7 @@ import { useEffect, Suspense } from "react";
 import { Sidebar } from "@/components/Sidebar";
 import { TerminalPanel } from "@/components/TerminalPanel";
 import { UpdateBanner } from "@/components/UpdateBanner";
+import { ToastContainer } from "@/components/ToastContainer";
 import { useView } from "@/lib/ViewContext";
 import { logger } from "@/lib/logger";
 import { Loader2 } from "lucide-react";
@@ -79,6 +80,7 @@ export function CanvasShell() {
         </main>
         <TerminalPanel />
       </div>
+      <ToastContainer />
     </>
   );
 }

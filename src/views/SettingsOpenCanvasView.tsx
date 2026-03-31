@@ -3,12 +3,14 @@ import { useState, useEffect } from "react";
 import { Save, RefreshCw, Power } from "lucide-react";
 import type { AppSettings } from "@/lib/globalConfig";
 import { logger } from "@/lib/logger";
+import { useToast } from "@/lib/ToastContext";
 
 const DEFAULT_SETTINGS: AppSettings = {
   verbose_logging: false,
 };
 
 export function OpenCanvasSettingsPage() {
+  const { toast } = useToast();
   const [settings, setSettings] = useState<AppSettings>({ ...DEFAULT_SETTINGS });
   const [loading, setLoading] = useState(true);
   const [saved, setSaved] = useState(false);
@@ -27,22 +29,27 @@ export function OpenCanvasSettingsPage() {
   }, []);
 
   const save = async () => {
-    await fetch("/api/settings/global", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ app_settings: settings }),
-    });
+    try {
+      await fetch("/api/settings/global", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ app_settings: settings }),
+      });
 
-    // Sync logger immediately so the change takes effect without reload
-    if (settings.verbose_logging) {
-      localStorage.setItem("oc-verbose", "true");
-    } else {
-      localStorage.removeItem("oc-verbose");
+      // Sync logger immediately so the change takes effect without reload
+      if (settings.verbose_logging) {
+        localStorage.setItem("oc-verbose", "true");
+      } else {
+        localStorage.removeItem("oc-verbose");
+      }
+      logger.sync();
+
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+      toast("Settings saved", { type: "success" });
+    } catch {
+      toast("Failed to save settings", { type: "error" });
     }
-    logger.sync();
-
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
   };
 
   const shutdown = async () => {

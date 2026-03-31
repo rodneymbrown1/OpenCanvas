@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { FileExplorer } from "@/components/FileExplorer";
 import { FileEditModal } from "@/components/FileEditModal";
+import { useToast } from "@/lib/ToastContext";
 import {
   Globe,
   RefreshCw,
@@ -13,6 +14,7 @@ import {
 } from "lucide-react";
 
 export default function DataView() {
+  const { toast } = useToast();
   const [globalDataDir, setGlobalDataDir] = useState<string | null>(null);
   const [configured, setConfigured] = useState(false);
   const [initializing, setInitializing] = useState(true);
@@ -58,7 +60,9 @@ export default function DataView() {
         body: JSON.stringify({ action: "setup" }),
       });
       await bootstrap();
-    } catch {}
+    } catch {
+      toast("Setup failed — could not initialize global data directory", { type: "error" });
+    }
     setInitializing(false);
   };
 

@@ -18,6 +18,7 @@ import {
   WifiOff,
   Square,
   Play,
+  Loader2,
 } from "lucide-react";
 import { CalendarAccordion } from "@/components/CalendarAccordion";
 
@@ -136,6 +137,7 @@ export default function ProjectsView() {
   const [newName, setNewName] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [createError, setCreateError] = useState("");
+  const [creating, setCreating] = useState(false);
   // Server status for non-current projects: path -> { running, port, services }
   interface ProjectServiceStatus {
     running: boolean;
@@ -257,19 +259,24 @@ export default function ProjectsView() {
 
   const handleCreate = async (name: string) => {
     setCreateError("");
-    const res = await fetch("/api/projects", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "create", name }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      setCreateError(data.error || "Failed to create project");
-      return;
+    setCreating(true);
+    try {
+      const res = await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "create", name }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setCreateError(data.error || "Failed to create project");
+        return;
+      }
+      setShowCreate(false);
+      setNewName("");
+      fetchState();
+    } finally {
+      setCreating(false);
     }
-    setShowCreate(false);
-    setNewName("");
-    fetchState();
   };
 
   const handleRegister = async (projectPath: string, name?: string) => {
@@ -381,10 +388,11 @@ export default function ProjectsView() {
               />
               <button
                 type="submit"
-                disabled={!newName.trim()}
-                className="px-3 py-1.5 rounded-lg bg-[var(--accent)] text-white text-xs disabled:opacity-50"
+                disabled={!newName.trim() || creating}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[var(--accent)] text-white text-xs disabled:opacity-50"
               >
-                Create
+                {creating && <Loader2 size={11} className="animate-spin" />}
+                {creating ? "Creating..." : "Create"}
               </button>
               <button
                 type="button"

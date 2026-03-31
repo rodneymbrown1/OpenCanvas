@@ -304,7 +304,7 @@ function ChangesPanel({ repoPath, onRefresh }: { repoPath: string; onRefresh: ()
         body: JSON.stringify({ repoPath, files }),
       });
       fetchChanges();
-    } catch {}
+    } catch (e: any) { setError(e.message || "Failed to stage files"); }
   };
 
   const unstageFiles = async (files: string[]) => {
@@ -314,7 +314,7 @@ function ChangesPanel({ repoPath, onRefresh }: { repoPath: string; onRefresh: ()
         body: JSON.stringify({ repoPath, files }),
       });
       fetchChanges();
-    } catch {}
+    } catch (e: any) { setError(e.message || "Failed to unstage files"); }
   };
 
   const handleCommit = async () => {

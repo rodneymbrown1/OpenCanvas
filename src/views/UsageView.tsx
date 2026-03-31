@@ -54,6 +54,78 @@ function estimateCost(agent: string, outputBytes: number, inputBytes: number): s
   return `$${cost.toFixed(2)}`;
 }
 
+interface DayBucket {
+  label: string;
+  tokens: number;
+}
+
+function TokenBarChart({ sessions }: { sessions: Session[] }) {
+  const now = new Date();
+  const DAY_MS = 86_400_000;
+  const days: DayBucket[] = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(now.getTime() - (6 - i) * DAY_MS);
+    return {
+      label: d.toLocaleDateString(undefined, { weekday: "short" }),
+      tokens: 0,
+    };
+  });
+
+  // Bucket sessions into the last 7 days by startedAt
+  for (const s of sessions) {
+    const start = new Date(s.startedAt).getTime();
+    const daysAgo = Math.floor((now.getTime() - start) / DAY_MS);
+    if (daysAgo >= 0 && daysAgo < 7) {
+      days[6 - daysAgo].tokens += estimateTokens(s.outputBytes + s.inputBytes);
+    }
+  }
+
+  const maxTokens = Math.max(...days.map((d) => d.tokens), 1);
+  const W = 700;
+  const H = 72;
+  const barW = Math.floor(W / 7) - 8;
+  const maxBarH = H - 20; // leave 20px for labels at bottom
+
+  return (
+    <svg
+      viewBox={`0 0 ${W} ${H + 16}`}
+      className="w-full"
+      aria-label="Token usage over the last 7 days"
+    >
+      {days.map((day, i) => {
+        const x = i * (W / 7) + 4;
+        const barH = day.tokens > 0 ? Math.max(4, Math.round((day.tokens / maxTokens) * maxBarH)) : 0;
+        const y = H - barH;
+        return (
+          <g key={i}>
+            {barH > 0 && (
+              <rect
+                x={x}
+                y={y}
+                width={barW}
+                height={barH}
+                rx={3}
+                fill="var(--accent)"
+                opacity={0.75}
+              >
+                <title>{day.label}: ~{day.tokens.toLocaleString()} tokens</title>
+              </rect>
+            )}
+            <text
+              x={x + barW / 2}
+              y={H + 13}
+              textAnchor="middle"
+              fontSize={10}
+              fill="var(--text-muted)"
+            >
+              {day.label}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
 export default function UsageView() {
   const { session: currentSession, setAgent } = useSession();
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -140,6 +212,17 @@ export default function UsageView() {
           </p>
         </div>
       </div>
+
+      {/* Activity chart */}
+      {agentSessions.length > 0 && (
+        <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-4">
+          <h2 className="text-xs font-medium text-[var(--text-muted)] uppercase tracking-wide mb-3 flex items-center gap-1.5">
+            <BarChart3 size={11} />
+            Activity — last 7 days
+          </h2>
+          <TokenBarChart sessions={agentSessions} />
+        </div>
+      )}
 
       {/* Session history */}
       <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl overflow-hidden">

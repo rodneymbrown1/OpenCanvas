@@ -7,10 +7,11 @@ import { CalendarToolbar } from "./calendar/CalendarToolbar";
 import { CalendarEventForm } from "./calendar/CalendarEventForm";
 import { CalendarEventPopover } from "./calendar/CalendarEventPopover";
 import { CalendarSidebar } from "./calendar/CalendarSidebar";
+import { GCalConnectionModal } from "./calendar/GCalConnectionModal";
 import { useCalendarNav } from "./calendar/useCalendarNav";
 
 export default function CalendarView() {
-  const { events, loading, addEvent, deleteEvent, updateEvent } = useCalendar();
+  const { events, loading, addEvent, deleteEvent, updateEvent, syncStatus, syncGoogleCalendar, pushToGoogle, removeFromGoogle } = useCalendar();
   const nav = useCalendarNav();
 
   const [showForm, setShowForm] = useState(false);
@@ -19,6 +20,7 @@ export default function CalendarView() {
   const [editingEvent, setEditingEvent] = useState<CalendarEvent | undefined>();
   const [popoverEvent, setPopoverEvent] = useState<CalendarEvent | null>(null);
   const [popoverPosition, setPopoverPosition] = useState({ x: 0, y: 0 });
+  const [showGCalModal, setShowGCalModal] = useState(false);
 
   const handleCreate = useCallback(
     async (event: Partial<CalendarEvent> & { title: string; startTime: string }) => {
@@ -105,6 +107,9 @@ export default function CalendarView() {
         onToday={nav.goToToday}
         onNewEvent={handleNewEvent}
         eventCount={events.length}
+        syncStatus={syncStatus}
+        onSync={syncGoogleCalendar}
+        onGCalClick={() => setShowGCalModal(true)}
       />
 
       <div className="flex flex-1 min-h-0">
@@ -116,6 +121,7 @@ export default function CalendarView() {
           onEventClick={handleEventClick}
           onDateSelect={handleDateSelect}
           onEventDrop={handleEventDrop}
+          isEmpty={events.length === 0}
         />
         <CalendarSidebar events={events} />
       </div>
@@ -138,6 +144,17 @@ export default function CalendarView() {
           onDelete={handleDelete}
           onComplete={handleComplete}
           onEdit={handleEdit}
+          onPushToGoogle={pushToGoogle}
+          onRemoveFromGoogle={removeFromGoogle}
+          gcalAvailable={syncStatus.gcalAvailable}
+        />
+      )}
+
+      {showGCalModal && (
+        <GCalConnectionModal
+          onClose={() => setShowGCalModal(false)}
+          syncStatus={syncStatus}
+          onSync={syncGoogleCalendar}
         />
       )}
     </div>

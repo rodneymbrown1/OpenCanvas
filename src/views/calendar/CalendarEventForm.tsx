@@ -1,9 +1,9 @@
 import { useState, useEffect } from "react";
-import { X, Bot, User, Calendar } from "lucide-react";
+import { X, Bot, User, Calendar, Loader2 } from "lucide-react";
 import type { CalendarEvent } from "@/lib/CalendarContext";
 
 interface CalendarEventFormProps {
-  onSubmit: (event: Partial<CalendarEvent> & { title: string; startTime: string }) => void;
+  onSubmit: (event: Partial<CalendarEvent> & { title: string; startTime: string }) => void | Promise<void>;
   onCancel: () => void;
   initialStart?: string;
   initialEnd?: string;
@@ -36,6 +36,7 @@ function toLocalDatetimeValue(iso: string): string {
 
 export function CalendarEventForm({ onSubmit, onCancel, initialStart, initialEnd, editEvent }: CalendarEventFormProps) {
   const isEdit = !!editEvent;
+  const [submitting, setSubmitting] = useState(false);
   const [isAgentEvent, setIsAgentEvent] = useState(editEvent?.target === "agent" || editEvent?.target === "both" || false);
   const [title, setTitle] = useState(editEvent?.title || "");
   const [description, setDescription] = useState(editEvent?.description || "");
@@ -75,20 +76,26 @@ export function CalendarEventForm({ onSubmit, onCancel, initialStart, initialEnd
         setAgents(agentData.agents);
         // Default to first installed agent
         const firstInstalled = agentData.agents.find((a: AgentInfo) => a.installed);
-        if (firstInstalled) setAgentChoice(firstInstalled.id);
+        if (firstInstalled && !editEvent?.action?.agent) setAgentChoice(firstInstalled.id);
       }
       if (projectData?.projects) {
         setProjects(projectData.projects.filter((p: Project) => p.exists));
       }
       if (mcpData?.available) {
         setMcpAvailable(true);
+        // Auto-enable Google Calendar sync for new events when MCP is available
+        if (!editEvent && !syncToGoogle) {
+          setSyncToGoogle(true);
+        }
       }
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title || !startTime) return;
+    setSubmitting(true);
 
     const common = {
       title,
@@ -100,27 +107,31 @@ export function CalendarEventForm({ onSubmit, onCancel, initialStart, initialEnd
       syncToGoogle: syncToGoogle && mcpAvailable ? true : undefined,
     };
 
-    if (isAgentEvent) {
-      onSubmit({
-        ...common,
-        description: agentPrompt || undefined,
-        target: "agent",
-        action: {
-          type: "prompt",
-          payload: agentPrompt || title,
-          agent: agentChoice,
-          projectPath: projectScope || undefined,
-        },
-      });
-    } else {
-      onSubmit({
-        ...common,
-        description: description || undefined,
-        target: "user",
-        action: reminderMessage
-          ? { type: "reminder", payload: reminderMessage }
-          : undefined,
-      });
+    try {
+      if (isAgentEvent) {
+        await onSubmit({
+          ...common,
+          description: agentPrompt || undefined,
+          target: "agent",
+          action: {
+            type: "prompt",
+            payload: agentPrompt || title,
+            agent: agentChoice,
+            projectPath: projectScope || undefined,
+          },
+        });
+      } else {
+        await onSubmit({
+          ...common,
+          description: description || undefined,
+          target: "user",
+          action: reminderMessage
+            ? { type: "reminder", payload: reminderMessage }
+            : undefined,
+        });
+      }
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -315,28 +326,36 @@ export function CalendarEventForm({ onSubmit, onCancel, initialStart, initialEnd
 
         {/* Google Calendar sync toggle */}
         <label
-          className={`flex items-center gap-2 text-xs py-2 ${
+          className={`flex items-center gap-2 text-xs py-2 rounded-lg px-2 ${
             mcpAvailable
-              ? "text-[var(--text-secondary)] cursor-pointer"
+              ? syncToGoogle
+                ? "text-purple-400 bg-purple-500/5 cursor-pointer"
+                : "text-[var(--text-secondary)] cursor-pointer hover:bg-purple-500/5"
               : "text-[var(--text-muted)] opacity-50 cursor-not-allowed"
           }`}
-          title={mcpAvailable ? undefined : "Google Calendar MCP not available. Ensure Claude Code CLI has access."}
+          title={mcpAvailable ? "Sync this event with Google Calendar" : "Google Calendar not connected. Go to Settings > Connections to set up."}
         >
           <input
             type="checkbox"
             checked={syncToGoogle}
             onChange={(e) => setSyncToGoogle(e.target.checked)}
             disabled={!mcpAvailable}
-            className="rounded border-[var(--border)] accent-[var(--accent)]"
+            className="rounded border-[var(--border)] accent-purple-500"
           />
-          {editEvent?.googleCalendarId ? "Synced with Google Calendar" : "Add to Google Calendar"}
+          {editEvent?.googleCalendarId
+            ? "Synced with Google Calendar"
+            : syncToGoogle
+            ? "Will sync to Google Calendar"
+            : "Add to Google Calendar"}
         </label>
 
         <button
           type="submit"
-          className="w-full py-2 text-sm font-medium rounded-lg bg-[var(--accent)] text-white hover:opacity-90 transition-opacity"
+          disabled={submitting}
+          className="w-full py-2 text-sm font-medium rounded-lg bg-[var(--accent)] text-white hover:opacity-90 transition-opacity disabled:opacity-60 flex items-center justify-center gap-2"
         >
-          {isEdit ? "Save Changes" : isAgentEvent ? "Schedule Agent Task" : "Create Event"}
+          {submitting && <Loader2 size={13} className="animate-spin" />}
+          {submitting ? "Saving..." : isEdit ? "Save Changes" : isAgentEvent ? "Schedule Agent Task" : "Create Event"}
         </button>
       </form>
     </div>

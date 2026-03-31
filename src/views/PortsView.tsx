@@ -1,6 +1,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { RefreshCw, Globe, Database, Terminal, Server, Wifi, ExternalLink, X } from "lucide-react";
+import { useToast } from "@/lib/ToastContext";
 
 interface PortInfo {
   port: number;
@@ -22,6 +23,7 @@ function getPortCategory(port: number, label: string): { icon: typeof Globe; col
 }
 
 export default function PortsView() {
+  const { toast } = useToast();
   const [ports, setPorts] = useState<PortInfo[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -56,7 +58,9 @@ export default function PortsView() {
       // Wait briefly then refresh
       await new Promise((r) => setTimeout(r, 500));
       await fetchPorts();
-    } catch {}
+    } catch {
+      toast(`Failed to kill port ${port}`, { type: "error" });
+    }
     setKilling(null);
   };
 

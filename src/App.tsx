@@ -4,6 +4,7 @@ import { TerminalProvider } from "@/lib/TerminalContext";
 import { ViewProvider } from "@/lib/ViewContext";
 import { CalendarProvider } from "@/lib/CalendarContext";
 import { JobsProvider } from "@/lib/JobsContext";
+import { ToastProvider } from "@/lib/ToastContext";
 import { CanvasShell } from "@/components/CanvasShell";
 import { useEffect } from "react";
 
@@ -18,19 +19,21 @@ function TitleUpdater() {
 
 export function App() {
   return (
-    <SessionProvider>
-      <TitleUpdater />
-      <ProjectProvider>
-        <TerminalProvider>
-          <ViewProvider>
-            <CalendarProvider>
-              <JobsProvider>
-                <CanvasShell />
-              </JobsProvider>
-            </CalendarProvider>
-          </ViewProvider>
-        </TerminalProvider>
-      </ProjectProvider>
-    </SessionProvider>
+    <ToastProvider>
+      <SessionProvider>
+        <TitleUpdater />
+        <ProjectProvider>
+          <TerminalProvider>
+            <ViewProvider>
+              <CalendarProvider>
+                <JobsProvider>
+                  <CanvasShell />
+                </JobsProvider>
+              </CalendarProvider>
+            </ViewProvider>
+          </TerminalProvider>
+        </ProjectProvider>
+      </SessionProvider>
+    </ToastProvider>
   );
 }

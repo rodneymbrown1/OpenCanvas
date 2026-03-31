@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { useView } from "../lib/ViewContext";
 import { logger } from "../lib/logger";
+import { useToast } from "../lib/ToastContext";
 import GitManagerModal from "./GitManagerModal";
 
 interface FileEntry {
@@ -454,6 +455,7 @@ function FileTreeNode({ entry, depth }: { entry: FileEntry; depth: number }) {
 
 export function FileExplorer({ onFilePreview, onFileEdit, rootDir, dragMode, onLinkDrop, onOpenGlobalPicker, readOnly, pollInterval }: FileExplorerProps) {
   const { setView } = useView();
+  const { toast } = useToast();
   const [tree, setTree] = useState<FileEntry[]>([]);
   const [root, setRoot] = useState("");
   const [loading, setLoading] = useState(true);
@@ -566,21 +568,25 @@ export function FileExplorer({ onFilePreview, onFileEdit, rootDir, dragMode, onL
     if (!creatingIn) return;
     const newPath = `${creatingIn.dir}/${name}`;
     const isFile = creatingIn.type === "file";
-    await fetch("/api/files/create", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        path: newPath,
-        type: isFile ? "file" : "directory",
-      }),
-    });
+    try {
+      await fetch("/api/files/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          path: newPath,
+          type: isFile ? "file" : "directory",
+        }),
+      });
+    } catch {
+      toast(`Failed to create ${isFile ? "file" : "folder"}`, { type: "error" });
+    }
     setCreatingIn(null);
     fetchTree();
     // Open edit modal for newly created files
     if (isFile && onFileEdit) {
       onFileEdit(newPath, true);
     }
-  }, [creatingIn, fetchTree, onFileEdit]);
+  }, [creatingIn, fetchTree, onFileEdit, toast]);
 
   const handleCreateCancel = useCallback(() => {
     setCreatingIn(null);
@@ -590,15 +596,18 @@ export function FileExplorer({ onFilePreview, onFileEdit, rootDir, dragMode, onL
     if (!renamingPath) return;
     const parentDir = renamingPath.split("/").slice(0, -1).join("/");
     const newPath = `${parentDir}/${newName}`;
-    await fetch("/api/files/move", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ source: renamingPath, destination: newPath }),
-    });
+    try {
+      await fetch("/api/files/move", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source: renamingPath, destination: newPath }),
+      });
+    } catch {
+      toast("Failed to rename", { type: "error" });
+    }
     setRenamingPath(null);
-
     fetchTree();
-  }, [renamingPath, fetchTree]);
+  }, [renamingPath, fetchTree, toast]);
 
   const handleRenameCancel = useCallback(() => {
     setRenamingPath(null);
@@ -701,14 +710,22 @@ export function FileExplorer({ onFilePreview, onFileEdit, rootDir, dragMode, onL
   };
 
   const handleInternalDrop = useCallback(async (source: string, targetDir: string) => {
-    await fetch("/api/files/move", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source, destination: targetDir }) });
+    try {
+      await fetch("/api/files/move", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source, destination: targetDir }) });
+    } catch {
+      toast("Failed to move file", { type: "error" });
+    }
     fetchTree();
-  }, [fetchTree]);
+  }, [fetchTree, toast]);
 
   const handleLinkDropInternal = useCallback(async (source: string, targetDir: string) => {
-    await fetch("/api/files/link", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source, targetDir }) });
+    try {
+      await fetch("/api/files/link", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source, targetDir }) });
+    } catch {
+      toast("Failed to link file", { type: "error" });
+    }
     fetchTree();
-  }, [fetchTree]);
+  }, [fetchTree, toast]);
 
   const handleExternalDrop = useCallback(async (files: FileList, targetDir: string, dataTransfer?: DataTransfer) => {
     const formData = new FormData();
@@ -742,9 +759,13 @@ export function FileExplorer({ onFilePreview, onFileEdit, rootDir, dragMode, onL
       }
     }
 
-    await fetch("/api/files/upload", { method: "POST", body: formData });
+    try {
+      await fetch("/api/files/upload", { method: "POST", body: formData });
+    } catch {
+      toast("Failed to upload file", { type: "error" });
+    }
     fetchTree();
-  }, [fetchTree]);
+  }, [fetchTree, toast]);
 
   const effectiveLinkDrop = onLinkDrop || handleLinkDropInternal;
 

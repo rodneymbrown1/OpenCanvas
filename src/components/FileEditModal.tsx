@@ -1,6 +1,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { X, Save, Loader2 } from "lucide-react";
+import { useToast } from "@/lib/ToastContext";
 
 interface FileEditModalProps {
   filePath: string;
@@ -10,6 +11,7 @@ interface FileEditModalProps {
 }
 
 export function FileEditModal({ filePath, isNew, onClose, onSaved }: FileEditModalProps) {
+  const { toast } = useToast();
   const [content, setContent] = useState("");
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
@@ -49,8 +51,12 @@ export function FileEditModal({ filePath, isNew, onClose, onSaved }: FileEditMod
         setDirty(false);
         onSaved?.();
         onClose();
+      } else {
+        toast("Failed to save file", { type: "error" });
       }
-    } catch {}
+    } catch {
+      toast("Failed to save file", { type: "error" });
+    }
     setSaving(false);
   };
 

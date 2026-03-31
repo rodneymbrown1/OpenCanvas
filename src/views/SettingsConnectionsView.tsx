@@ -10,8 +10,18 @@ import {
   Calendar,
   Github,
   LogOut,
+  ExternalLink,
 } from "lucide-react";
+import { AgentSelector, useActiveAgent } from "../components/AgentSelector";
 import { logger } from "../lib/logger";
+
+type AgentType = "claude" | "codex" | "gemini";
+
+const AGENT_LABELS: Record<AgentType, string> = {
+  claude: "Claude",
+  codex: "Codex",
+  gemini: "Gemini",
+};
 
 interface ConnectionInfo {
   id: string;
@@ -54,6 +64,7 @@ interface McpStatus {
   calendars: { id: string; summary: string; primary: boolean }[];
   userEmail: string | null;
   error: string | null;
+  agent?: string;
 }
 
 interface PipelineStep {
@@ -68,9 +79,12 @@ interface PipelineFix {
   action?: string;
   command?: string;
   raw?: boolean;
+  instructions?: string[];
 }
 
 function GoogleCalendarMcpCard() {
+  const [activeAgent] = useActiveAgent();
+  const [selectedAgent, setSelectedAgent] = useState<AgentType>(activeAgent);
   const [status, setStatus] = useState<McpStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
@@ -78,18 +92,21 @@ function GoogleCalendarMcpCard() {
   const [pullResult, setPullResult] = useState<string | null>(null);
   const [steps, setSteps] = useState<PipelineStep[]>([]);
   const [fix, setFix] = useState<PipelineFix | null>(null);
-  const [fixRunning, setFixRunning] = useState(false);
   const progressRef = useRef<HTMLDivElement>(null);
 
-  const STEP_LABELS = ["", "Claude CLI", "MCP Server", "Calendar Access", "Connected"];
+  // Sync selectedAgent when activeAgent changes (initial load)
+  useEffect(() => { setSelectedAgent(activeAgent); }, [activeAgent]);
+
+  const agentLabel = AGENT_LABELS[selectedAgent] || selectedAgent;
+  const STEP_LABELS = ["", `${agentLabel} CLI`, "MCP Server", "Calendar Access", "Connected"];
 
   const checkStatus = useCallback(() => {
-    fetch("/api/calendar/mcp-status")
+    fetch(`/api/calendar/mcp-status?agent=${selectedAgent}`)
       .then((r) => r.json())
       .then((data) => setStatus(data))
       .catch(() => setStatus({ available: false, calendars: [], userEmail: null, error: "Failed to check MCP status" }))
       .finally(() => setLoading(false));
-  }, []);
+  }, [selectedAgent]);
 
   useEffect(() => { checkStatus(); }, [checkStatus]);
 
@@ -99,7 +116,11 @@ function GoogleCalendarMcpCard() {
     setFix(null);
 
     try {
-      const resp = await fetch("/api/calendar/mcp-connect", { method: "POST" });
+      const resp = await fetch("/api/calendar/mcp-connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agent: selectedAgent }),
+      });
       const contentType = resp.headers.get("content-type") || "";
 
       if (!contentType.includes("text/event-stream")) {
@@ -164,24 +185,19 @@ function GoogleCalendarMcpCard() {
     }
   };
 
+  const SETTINGS_URLS: Record<AgentType, string> = {
+    claude: "https://claude.ai/settings",
+    codex: "https://platform.openai.com/settings",
+    gemini: "https://aistudio.google.com/app/settings",
+  };
+
   const handleFix = async (action?: string, command?: string) => {
-    if (action === "fix-scopes") {
-      setFixRunning(true);
-      try {
-        const resp = await fetch("/api/calendar/mcp-connect", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "fix-scopes" }),
-        });
-        const data = await resp.json();
-        setFix({ step: 0, message: data.message || "Done. Try connecting again." });
-      } catch {
-        setFix({ step: 0, message: "Fix failed. Run 'claude mcp reset-auth google-calendar' manually." });
-      } finally {
-        setFixRunning(false);
-      }
+    if (action === "open-settings") {
+      window.open(SETTINGS_URLS[selectedAgent] || SETTINGS_URLS.claude, "_blank", "noopener,noreferrer");
+    } else if (action === "needs-auth") {
+      navigator.clipboard?.writeText(selectedAgent);
+      setFix((f) => f ? { ...f, message: `${f.message} ('${selectedAgent}' copied to clipboard)` } : null);
     } else if (command) {
-      // Copy command to clipboard
       navigator.clipboard?.writeText(command);
       setFix((f) => f ? { ...f, message: `${f.message} (copied to clipboard)` } : null);
     }
@@ -190,23 +206,30 @@ function GoogleCalendarMcpCard() {
   const handlePull = async () => {
     setPulling(true);
     setPullResult(null);
+    logger.calendar("Starting Google Calendar pull...");
     try {
       const res = await fetch("/api/calendar/mcp-sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "pull", calendarId: "primary" }),
+        body: JSON.stringify({ action: "pull", calendarId: "primary", agent: selectedAgent }),
       });
       const data = await res.json();
+      logger.calendar("Pull response:", data);
       if (res.ok) {
-        setPullResult(`Pulled ${data.pulled} new, updated ${data.updated}${data.errors?.length ? `, ${data.errors.length} errors` : ""}`);
+        const parts = [`Pulled ${data.pulled} new, updated ${data.updated}`];
+        if (data.total !== undefined) parts.push(`(${data.total} total from Google)`);
+        if (data.errors?.length) parts.push(`${data.errors.length} errors`);
+        setPullResult(parts.join(", "));
       } else {
         setPullResult(data.error || "Pull failed");
+        logger.calendar("Pull failed:", data.error, data.detail);
       }
     } catch (err: any) {
       setPullResult(err.message || "Pull failed");
+      logger.calendar("Pull error:", err.message);
     } finally {
       setPulling(false);
-      setTimeout(() => setPullResult(null), 8000);
+      setTimeout(() => setPullResult(null), 12000);
     }
   };
 
@@ -252,19 +275,23 @@ function GoogleCalendarMcpCard() {
           </div>
         </div>
 
-        {/* Not connected: show connect button */}
+        {/* Not connected: show agent selector + connect button */}
         {!loading && !status?.available && steps.length === 0 && (
-          <div className="space-y-2">
+          <div className="space-y-3">
             <p className="text-xs text-[var(--text-muted)]">
-              Connect your Google Calendar to sync events with Open Canvas. Claude handles authentication automatically.
+              Connect your Google Calendar to sync events with Open Canvas. Your agent handles authentication automatically.
             </p>
+            <div className="space-y-2">
+              <p className="text-[10px] text-[var(--text-muted)] uppercase tracking-wide">Connect with</p>
+              <AgentSelector value={selectedAgent} onChange={setSelectedAgent} />
+            </div>
             <button
               onClick={handleConnect}
               disabled={connecting}
               className="flex items-center gap-1.5 px-4 py-2 text-xs font-medium rounded-lg bg-[var(--accent)] text-white hover:opacity-90 transition-opacity disabled:opacity-50"
             >
               {connecting ? <Loader2 size={12} className="animate-spin" /> : <Calendar size={12} />}
-              Connect Google Calendar
+              Connect via {agentLabel}
             </button>
           </div>
         )}
@@ -294,16 +321,30 @@ function GoogleCalendarMcpCard() {
         {/* Fix suggestion */}
         {fix && (
           <div className="bg-yellow-500/5 border border-yellow-500/20 rounded-lg p-3 space-y-2">
-            <p className="text-xs text-yellow-300">{fix.message}</p>
-            <div className="flex gap-2">
-              {fix.action && (
+            <p className="text-xs text-yellow-300 font-medium">{fix.message}</p>
+            {fix.instructions && fix.instructions.length > 0 && (
+              <ol className="list-decimal list-inside space-y-1 text-xs text-[var(--text-muted)]">
+                {fix.instructions.map((instruction, i) => (
+                  <li key={i}>{instruction}</li>
+                ))}
+              </ol>
+            )}
+            <div className="flex gap-2 flex-wrap">
+              {fix.action === "open-settings" && (
                 <button
-                  onClick={() => handleFix(fix.action)}
-                  disabled={fixRunning}
-                  className="flex items-center gap-1 px-3 py-1.5 text-xs rounded bg-yellow-500/20 text-yellow-300 hover:bg-yellow-500/30 transition-colors disabled:opacity-50"
+                  onClick={() => handleFix("open-settings")}
+                  className="flex items-center gap-1 px-3 py-1.5 text-xs rounded bg-yellow-500/20 text-yellow-300 hover:bg-yellow-500/30 transition-colors"
                 >
-                  {fixRunning ? <Loader2 size={10} className="animate-spin" /> : <RefreshCw size={10} />}
-                  Fix Automatically
+                  <ExternalLink size={10} />
+                  Open {agentLabel} Settings
+                </button>
+              )}
+              {fix.action === "needs-auth" && (
+                <button
+                  onClick={() => handleFix("needs-auth")}
+                  className="flex items-center gap-1 px-3 py-1.5 text-xs rounded bg-yellow-500/20 text-yellow-300 hover:bg-yellow-500/30 transition-colors"
+                >
+                  Copy Terminal Command
                 </button>
               )}
               {fix.command && (
@@ -353,7 +394,7 @@ function GoogleCalendarMcpCard() {
 
         <div className="flex items-center gap-2 text-xs text-[var(--text-muted)] bg-[var(--bg-primary)] rounded-lg px-3 py-2">
           <CheckCircle size={12} className="text-[var(--accent)] shrink-0" />
-          <span>Powered by Claude MCP. No API keys or manual OAuth setup.</span>
+          <span>Powered by {agentLabel} MCP. No API keys or manual OAuth setup.</span>
         </div>
       </div>
     </div>
@@ -385,7 +426,7 @@ export function ConnectionsPage() {
       setConnections(data.connections || []);
       setProviders(data.providers || []);
     } catch {
-      // silent
+      setMessage({ type: "error", text: "Failed to load connections" });
     }
   }, []);
 
@@ -462,7 +503,7 @@ export function ConnectionsPage() {
     setTimeout(() => setMessage(null), 3000);
   };
 
-  // OAuth flow removed — Google Calendar uses Claude's built-in MCP server
+  // OAuth flow removed — Google Calendar uses agent MCP servers (Claude/Codex/Gemini)
 
   const removeConnection = async (id: string) => {
     await fetch("/api/calendar/connections", {

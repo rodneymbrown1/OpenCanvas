@@ -83,6 +83,7 @@ export function AgentTerminal({
       fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace',
       theme: getTerminalTheme(),
       allowProposedApi: true,
+      scrollback: 10000,
     });
 
     const fitAddon = new FitAddon();
@@ -138,6 +139,7 @@ export function AgentTerminal({
         msg = JSON.parse(event.data);
       } catch (e) {
         log("error", "Failed to parse server message:", event.data, e);
+        termRef.current?.writeln("\x1b[31m[Open Canvas]\x1b[0m Malformed message from PTY server.");
         return;
       }
 
