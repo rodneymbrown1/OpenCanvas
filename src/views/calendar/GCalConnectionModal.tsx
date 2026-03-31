@@ -8,9 +8,14 @@ import {
   RefreshCw,
   Trash2,
   MessageSquare,
+  Zap,
+  Terminal,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import type { SyncStatus } from "@/lib/CalendarContext";
 import { useToast } from "@/lib/ToastContext";
+import { AgentTerminal } from "@/components/Terminal";
 
 interface McpStatus {
   available: boolean;
@@ -20,7 +25,25 @@ interface McpStatus {
   error: string | null;
   agent?: string;
   connectionId?: string;
+  calendarDir?: string;
 }
+
+interface AutoSyncStatus {
+  enabled: boolean;
+  eventId: string | null;
+  interval: string;
+  recurrence: string | null;
+  lastRun?: string | null;
+}
+
+const AUTO_SYNC_INTERVAL_LABELS: Record<string, string> = {
+  "30min": "Every 30 min",
+  "1h": "Every hour",
+  "2h": "Every 2 hours",
+  "6h": "Every 6 hours",
+  "12h": "Every 12 hours",
+  "24h": "Every day",
+};
 
 interface PipelineStep {
   step: number;
@@ -43,8 +66,19 @@ export function GCalConnectionModal({ onClose, syncStatus, onSync }: GCalConnect
   const [disconnecting, setDisconnecting] = useState(false);
   const [needsSync, setNeedsSync] = useState(false);
   const progressRef = useRef<HTMLDivElement>(null);
+  const [autoSync, setAutoSync] = useState<AutoSyncStatus>({ enabled: false, eventId: null, interval: "1h", recurrence: null });
+  const [autoSyncLoading, setAutoSyncLoading] = useState(false);
+  const [showTerminal, setShowTerminal] = useState(false);
+  const [terminalKey, setTerminalKey] = useState(0);
 
   const STEP_LABELS = ["", "Claude CLI", "Connection Status", "Calendar Access", "Ready"];
+
+  const fetchAutoSync = useCallback(() => {
+    fetch("/api/calendar/auto-sync")
+      .then((r) => r.json())
+      .then((data) => setAutoSync(data))
+      .catch(() => {});
+  }, []);
 
   const checkStatus = useCallback(() => {
     setLoading(true);
@@ -52,14 +86,55 @@ export function GCalConnectionModal({ onClose, syncStatus, onSync }: GCalConnect
       .then((r) => r.json())
       .then((data) => {
         setStatus(data);
-        // If connected but never synced, prompt for sync
         if (data.available && !data.lastSync) setNeedsSync(true);
       })
       .catch(() => setStatus({ available: false, calendars: [], userEmail: null, lastSync: null, error: "Failed to check" }))
       .finally(() => setLoading(false));
-  }, []);
+    fetchAutoSync();
+  }, [fetchAutoSync]);
 
   useEffect(() => { checkStatus(); }, [checkStatus]);
+
+  const handleAutoSyncToggle = async () => {
+    setAutoSyncLoading(true);
+    try {
+      if (autoSync.enabled) {
+        await fetch("/api/calendar/auto-sync", { method: "DELETE" });
+        setAutoSync({ enabled: false, eventId: null, interval: autoSync.interval, recurrence: null });
+        toast("Auto-sync disabled", { type: "info" });
+      } else {
+        const res = await fetch("/api/calendar/auto-sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ interval: autoSync.interval }),
+        });
+        const data = await res.json();
+        setAutoSync({ ...data });
+        toast("Auto-sync enabled", { type: "success" });
+      }
+    } catch {
+      toast("Failed to update auto-sync", { type: "error" });
+    } finally {
+      setAutoSyncLoading(false);
+    }
+  };
+
+  const handleAutoSyncIntervalChange = async (interval: string) => {
+    setAutoSync((prev) => ({ ...prev, interval }));
+    if (autoSync.enabled) {
+      try {
+        const res = await fetch("/api/calendar/auto-sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ interval }),
+        });
+        const data = await res.json();
+        setAutoSync({ ...data });
+      } catch {
+        toast("Failed to update interval", { type: "error" });
+      }
+    }
+  };
 
   const handleConnect = async () => {
     setConnecting(true);
@@ -171,7 +246,7 @@ export function GCalConnectionModal({ onClose, syncStatus, onSync }: GCalConnect
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl shadow-2xl w-[460px] max-h-[80vh] overflow-auto"
+        className={`bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl shadow-2xl max-h-[90vh] overflow-auto transition-all duration-200 ${showTerminal ? "w-[640px]" : "w-[460px]"}`}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-5 pt-5 pb-3">
@@ -262,6 +337,52 @@ export function GCalConnectionModal({ onClose, syncStatus, onSync }: GCalConnect
                 </div>
               </div>
 
+              {/* Auto-sync */}
+              <div className="bg-[var(--bg-primary)] rounded-lg p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Zap size={13} className={autoSync.enabled ? "text-yellow-400" : "text-[var(--text-muted)]"} />
+                    <span className="text-xs font-medium text-[var(--text-primary)]">Auto-Sync</span>
+                    {autoSync.enabled && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-yellow-500/10 text-yellow-400">Active</span>
+                    )}
+                  </div>
+                  <button
+                    onClick={handleAutoSyncToggle}
+                    disabled={autoSyncLoading}
+                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors disabled:opacity-50 ${
+                      autoSync.enabled ? "bg-yellow-500" : "bg-[var(--border)]"
+                    }`}
+                  >
+                    <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${
+                      autoSync.enabled ? "translate-x-4" : "translate-x-0.5"
+                    }`} />
+                  </button>
+                </div>
+                {autoSync.enabled && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-[var(--text-muted)]">Interval</span>
+                    <select
+                      value={autoSync.interval}
+                      onChange={(e) => handleAutoSyncIntervalChange(e.target.value)}
+                      className="flex-1 text-[10px] bg-[var(--bg-secondary)] border border-[var(--border)] rounded px-1.5 py-1 text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
+                    >
+                      {Object.entries(AUTO_SYNC_INTERVAL_LABELS).map(([key, label]) => (
+                        <option key={key} value={key}>{label}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                {!autoSync.enabled && (
+                  <p className="text-[10px] text-[var(--text-muted)]">
+                    Schedule Claude to sync your Google Calendar automatically on a recurring interval.
+                  </p>
+                )}
+                {autoSync.enabled && autoSync.lastRun && (
+                  <p className="text-[10px] text-[var(--text-muted)]">Last run: {formatSync(autoSync.lastRun)}</p>
+                )}
+              </div>
+
               {/* Actions */}
               <div className="flex flex-wrap gap-2">
                 <button
@@ -332,6 +453,32 @@ export function GCalConnectionModal({ onClose, syncStatus, onSync }: GCalConnect
               </p>
             </div>
           )}
+
+          {/* Debug Terminal */}
+          <div className="border border-[var(--border)] rounded-lg overflow-hidden">
+            <button
+              onClick={() => {
+                if (!showTerminal) setTerminalKey((k) => k + 1);
+                setShowTerminal((v) => !v);
+              }}
+              className="w-full flex items-center gap-2 px-3 py-2 bg-[var(--bg-primary)] hover:bg-[var(--bg-secondary)] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors text-xs"
+            >
+              {showTerminal ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+              <Terminal size={12} />
+              <span>Debug Terminal</span>
+              <span className="ml-auto text-[10px] opacity-60">~/.open-canvas/calendar</span>
+            </button>
+            {showTerminal && status?.calendarDir && (
+              <div className="h-[220px] bg-[#0a0a0a]">
+                <AgentTerminal
+                  key={terminalKey}
+                  agent="shell"
+                  cwd={status.calendarDir}
+                  visible
+                />
+              </div>
+            )}
+          </div>
 
           {/* Footer */}
           <div className="text-[10px] text-[var(--text-muted)] pt-1">

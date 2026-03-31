@@ -152,16 +152,19 @@ export function CalendarAccordion() {
           </span>
         )}
         <div className="flex-1" />
-        <button
+        <span
+          role="button"
+          tabIndex={0}
           onClick={(e) => {
             e.stopPropagation();
             setView("calendar");
           }}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); setView("calendar"); } }}
           className="p-0.5 rounded hover:bg-[var(--bg-primary)] text-[var(--text-muted)] hover:text-[var(--accent)]"
           title="Open full calendar"
         >
           <ExternalLink size={12} />
-        </button>
+        </span>
       </button>
 
       {/* Body */}

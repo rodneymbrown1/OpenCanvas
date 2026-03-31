@@ -138,8 +138,37 @@
 
 .fc .fc-timegrid-now-indicator-line {
   border-color: var(--accent);
+  border-width: 2px;
 }
 
 .fc .fc-timegrid-now-indicator-arrow {
   border-color: var(--accent);
+}
+
+/* Ensure events render with minimum height in timeGrid views */
+.fc .fc-timegrid-event {
+  min-height: 20px;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  overflow: hidden;
+}
+
+.fc .fc-timegrid-event .fc-event-main {
+  padding: 2px 4px;
+}
+
+/* All-day events in timeGrid views need proper styling */
+.fc .fc-timegrid .fc-daygrid-body {
+  /* Ensure all-day section isn't collapsed */
+  min-height: 28px;
+}
+
+/* Make timeGrid events resizable */
+.fc .fc-timegrid-event .fc-event-resizer {
+  display: block;
+}
+
+/* Google Calendar events get distinctive styling in timeGrid */
+.fc .fc-timegrid-event[data-external="true"] {
+  border-left: 3px solid #8b5cf6;
 }

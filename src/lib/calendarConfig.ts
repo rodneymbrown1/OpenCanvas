@@ -415,6 +415,14 @@ export function updateEvent(
     ...updates,
     updatedAt: new Date().toISOString(),
   };
+
+  // Handle explicit null/undefined removals (e.g. unlinking Google Calendar)
+  for (const [key, val] of Object.entries(updates)) {
+    if (val === undefined || val === null) {
+      delete (events[idx] as unknown as Record<string, unknown>)[key];
+    }
+  }
+
   writeEvents(events);
   return events[idx];
 }

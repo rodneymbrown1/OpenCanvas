@@ -1,31 +1,52 @@
 // server/routes/calendar-connections.mjs — Calendar connection & sync API routes
-// Google Calendar sync is handled via Claude's built-in MCP tools (gcal_*).
-// No OAuth, no gcloud CLI, no API keys required.
+//
+// Architecture: Google Calendar tools (gcal_*) are Claude.ai built-in integrations,
+// NOT MCP servers that can be spawned via CLI. The server provides:
+//   - /api/calendar/gcal-import  — accepts pre-fetched events from Claude Code
+//   - /api/calendar/gcal-connect — lightweight connection registration (no agent spawn)
+//   - /api/calendar/mcp-status   — reads cached connection state from connections.yaml
+// Actual Google Calendar API calls happen through Claude Code's MCP tools.
 
-import { spawn, execFile } from "child_process";
+import { execFile } from "child_process";
 import {
   listConnections,
+  addConnection,
   removeConnection,
   updateConnection,
-  getConnection,
 } from "../../src/lib/calendar/connections.js";
 import { listProviders } from "../../src/lib/calendar/providers/index.js";
 import { log, logError } from "../logger.mjs";
-import {
-  mcpCheckAvailable,
-  mcpListEvents,
-  mcpCreateEvent,
-  mcpUpdateEvent,
-  mcpDeleteEvent,
-} from "../lib/mcp-calendar.mjs";
 import {
   readEvents,
   addEvent as addCalendarEvent,
   updateEvent as updateCalendarEvent,
   getEventById,
+  deleteEvent as deleteCalendarEvent,
+  CALENDAR_DIR,
 } from "../../src/lib/calendarConfig.js";
 
 const CAT = "calendar";
+
+// ── Auto-sync helpers ──────────────────────────────────────────────────────────
+
+const GCAL_AUTO_SYNC_TAG = "gcal-auto-sync";
+
+const AUTO_SYNC_INTERVALS = {
+  "30min": "*/30 * * * *",
+  "1h":    "0 * * * *",
+  "2h":    "0 */2 * * *",
+  "6h":    "0 */6 * * *",
+  "12h":   "0 */12 * * *",
+  "24h":   "0 0 * * *",
+};
+
+function findAutoSyncEvent() {
+  return readEvents().find(
+    (e) => e.tags?.includes(GCAL_AUTO_SYNC_TAG) && e.status !== "cancelled"
+  );
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function parseBody(req) {
   return new Promise((resolve, reject) => {
@@ -43,6 +64,113 @@ function jsonResponse(res, data, status = 200) {
   res.end(JSON.stringify(data));
 }
 
+/**
+ * Find an existing MCP-based connection for a given agent (or any agent).
+ */
+function findMcpConnection(agent) {
+  const all = listConnections();
+  if (agent) {
+    return all.find(
+      (c) => c.credentials?.auth_method === "mcp" && c.credentials?.agent === agent && c.enabled
+    );
+  }
+  // Any MCP connection
+  return all.find((c) => c.credentials?.auth_method === "mcp" && c.enabled);
+}
+
+/**
+ * Normalize a datetime value from Google Calendar events.
+ * Handles: ISO strings, date-only strings, {dateTime: "..."}, {date: "..."}
+ */
+function normalizeDateTime(value) {
+  if (!value) return null;
+  if (typeof value === "string") {
+    const d = new Date(value);
+    if (isNaN(d.getTime())) {
+      logError(CAT, `normalizeDateTime: unparseable string "${value}"`);
+      return null;
+    }
+    return value;
+  }
+  if (typeof value === "object") {
+    if (value.dateTime) return value.dateTime;
+    if (value.date) return value.date;
+    if (value.toISOString) return value.toISOString();
+    logError(CAT, `normalizeDateTime: unknown format: ${JSON.stringify(value).slice(0, 100)}`);
+  }
+  return null;
+}
+
+/**
+ * Upsert an array of Google Calendar events into local calendar.yaml.
+ * Returns { pulled, updated, errors[], total }.
+ */
+function upsertGoogleEvents(remoteEvents) {
+  const localEvents = readEvents();
+  let pulled = 0;
+  let updated = 0;
+  const errors = [];
+
+  for (const remote of remoteEvents) {
+    try {
+      const remoteId = remote.id || remote.eventId || remote.uid;
+      const title = remote.summary || remote.title || "(No title)";
+      const description = remote.description || "";
+
+      let startTime = normalizeDateTime(remote.start || remote.startTime || remote.dtstart);
+      let endTime = normalizeDateTime(remote.end || remote.endTime || remote.dtend);
+      const allDay = remote.allDay === true || remote.all_day === true ||
+        (startTime && !startTime.includes("T"));
+
+      if (!remoteId) {
+        logError(CAT, `gcal-import: skipping event with no ID: ${JSON.stringify(remote).slice(0, 200)}`);
+        continue;
+      }
+      if (!startTime) {
+        logError(CAT, `gcal-import: skipping "${title}" — no start time: ${JSON.stringify(remote).slice(0, 200)}`);
+        continue;
+      }
+
+      log(CAT, `gcal-import: "${title}" id=${remoteId} start=${startTime} allDay=${allDay}`);
+
+      const externalRef = `mcp:${remoteId}`;
+      const existing = localEvents.find((e) => e.googleCalendarId === externalRef);
+
+      if (existing) {
+        updateCalendarEvent(existing.id, {
+          title,
+          description: description || existing.description,
+          startTime,
+          endTime: endTime || existing.endTime,
+          allDay,
+        });
+        updated++;
+      } else {
+        addCalendarEvent({
+          title,
+          description: description || undefined,
+          startTime,
+          endTime: endTime || undefined,
+          allDay,
+          source: { agent: "user" },
+          target: "user",
+          status: "pending",
+          googleCalendarId: externalRef,
+          tags: ["synced", "google-calendar"],
+        });
+        pulled++;
+      }
+    } catch (eventErr) {
+      const errMsg = `"${remote.summary || remote.title || "?"}": ${eventErr.message}`;
+      errors.push(errMsg);
+      logError(CAT, `gcal-import event error: ${errMsg}`);
+    }
+  }
+
+  logError(CAT, `gcal-import complete: ${pulled} new, ${updated} updated, ${errors.length} errors / ${remoteEvents.length} total`);
+  return { pulled, updated, errors, total: remoteEvents.length };
+}
+
 // ── Route handler ──────────────────────────────────────────────────────────────
 
 export async function handle(req, res, url) {
@@ -51,15 +179,19 @@ export async function handle(req, res, url) {
 
   // ── GET /api/calendar/connections ──────────────────────────────────────
   if (pathname === "/api/calendar/connections" && method === "GET") {
-    log(CAT, "Listing calendar connections");
     const connections = listConnections();
     const safe = connections.map((c) => ({
       ...c,
       credentials: {
-        has_access_token: !!c.credentials.access_token,
-        has_refresh_token: !!c.credentials.refresh_token,
-        token_expiry: c.credentials.token_expiry,
-        auth_method: c.credentials.auth_method || "mcp",
+        has_access_token: !!c.credentials?.access_token,
+        has_refresh_token: !!c.credentials?.refresh_token,
+        token_expiry: c.credentials?.token_expiry,
+        auth_method: c.credentials?.auth_method || "mcp",
+        agent: c.credentials?.agent,
+        last_verified: c.credentials?.last_verified,
+        user_email: c.credentials?.user_email,
+        calendar_count: c.credentials?.calendar_count,
+        calendars_json: c.credentials?.calendars_json,
       },
     }));
     jsonResponse(res, { connections: safe, providers: listProviders().map((p) => ({ id: p.id, name: p.name })) });
@@ -67,48 +199,199 @@ export async function handle(req, res, url) {
   }
 
   // ── GET /api/calendar/mcp-status ──────────────────────────────────────
+  // Pure cache read from connections.yaml — never spawns agents.
   if (pathname === "/api/calendar/mcp-status" && method === "GET") {
-    log(CAT, "Checking MCP Google Calendar status");
-    const status = await mcpCheckAvailable();
-    jsonResponse(res, status);
+    const agent = url.searchParams.get("agent") || null;
+
+    const conn = findMcpConnection(agent);
+    if (conn) {
+      let calendars = [];
+      try { calendars = conn.credentials?.calendars_json ? JSON.parse(conn.credentials.calendars_json) : []; } catch {}
+      jsonResponse(res, {
+        available: true,
+        calendars,
+        userEmail: conn.credentials?.user_email || null,
+        lastVerified: conn.credentials?.last_verified || null,
+        lastSync: conn.sync_state?.last_sync || null,
+        error: conn.sync_state?.error || null,
+        agent: conn.credentials?.agent || "claude",
+        connectionId: conn.id,
+        calendarDir: CALENDAR_DIR,
+      });
+    } else {
+      jsonResponse(res, {
+        available: false,
+        calendars: [],
+        userEmail: null,
+        error: null,
+        agent: agent || "claude",
+        calendarDir: CALENDAR_DIR,
+      });
+    }
     return true;
   }
 
-  // ── POST /api/calendar/mcp-connect ────────────────────────────────────
-  // Multi-step diagnostic pipeline. Checks each prerequisite, reports
-  // step-by-step status, and offers actionable fix suggestions.
-  if (pathname === "/api/calendar/mcp-connect" && method === "POST") {
-    log(CAT, "Starting MCP Google Calendar diagnostic pipeline");
-
+  // ── POST /api/calendar/gcal-import ────────────────────────────────────
+  // Core sync endpoint. Accepts pre-fetched Google Calendar events and
+  // upserts them into calendar.yaml. Called by Claude Code after it
+  // fetches events via mcp__claude_ai_Google_Calendar__gcal_list_events.
+  if (pathname === "/api/calendar/gcal-import" && method === "POST") {
     const body = await parseBody(req);
+    logError(CAT, `gcal-import: received request with ${body.events?.length ?? 0} events`);
 
-    // If action is "fix-scopes", attempt to fix by spawning Claude to reconnect
-    if (body.action === "fix-scopes") {
-      log(CAT, "Attempting MCP scope fix via Claude reconnect");
-      try {
-        const result = await new Promise((resolve) => {
-          execFile("claude", ["-p",
-            "My Google Calendar MCP connection has insufficient OAuth scopes. Please disconnect and reconnect the Google Calendar integration with full read/write calendar permissions. Confirm when done."
-          ], { timeout: 60000, encoding: "utf-8" }, (err, stdout) => {
-            resolve({ err, stdout });
-          });
-        });
-        jsonResponse(res, {
-          ok: true,
-          message: result.stdout?.includes("reconnect") || result.stdout?.includes("done") || result.stdout?.includes("success")
-            ? "Auth reset requested. Click 'Retry' to test the connection."
-            : "Claude attempted to fix permissions. Click 'Retry' to check. If it still fails, open Claude Code in a terminal and ask it to reconnect Google Calendar with full permissions.",
-        });
-      } catch {
-        jsonResponse(res, {
-          ok: false,
-          message: "Could not fix automatically. Open Claude Code in a terminal and say: 'Reconnect my Google Calendar with full read/write permissions'",
-        });
-      }
+    if (!body.events || !Array.isArray(body.events)) {
+      logError(CAT, `gcal-import: invalid body — events field missing or not array`);
+      jsonResponse(res, { error: "events array required" }, 400);
       return true;
     }
 
-    // SSE streaming pipeline
+    if (body.events.length === 0) {
+      jsonResponse(res, { pulled: 0, updated: 0, errors: [], total: 0 });
+      return true;
+    }
+
+    // Log first event for debugging
+    logError(CAT, `gcal-import: first event sample: ${JSON.stringify(body.events[0]).slice(0, 500)}`);
+
+    const result = upsertGoogleEvents(body.events);
+
+    // Update connection sync state if we have one
+    const conn = findMcpConnection(body.agent || null);
+    if (conn) {
+      updateConnection(conn.id, {
+        credentials: {
+          ...conn.credentials,
+          last_verified: new Date().toISOString(),
+        },
+        sync_state: {
+          last_sync: new Date().toISOString(),
+          error: result.errors.length ? result.errors[0] : null,
+        },
+      });
+    }
+
+    jsonResponse(res, result);
+    return true;
+  }
+
+  // ── POST /api/calendar/gcal-connect ───────────────────────────────────
+  // Register a Google Calendar connection. Called by Claude Code or the
+  // GCalConnectionModal after verifying access via MCP tools.
+  // Accepts: { agent, userEmail, calendars: [{id, summary, primary}] }
+  if (pathname === "/api/calendar/gcal-connect" && method === "POST") {
+    const body = await parseBody(req);
+    const agent = body.agent || "claude";
+    const calendars = body.calendars || [];
+    const userEmail = body.userEmail || "";
+
+    logError(CAT, `gcal-connect: agent=${agent} email=${userEmail} calendars=${calendars.length}`);
+
+    const credentialData = {
+      auth_method: "mcp",
+      agent,
+      user_email: userEmail,
+      calendar_count: String(calendars.length),
+      calendars_json: JSON.stringify(calendars),
+      last_verified: new Date().toISOString(),
+      access_token: "mcp-managed",
+      refresh_token: "mcp-managed",
+    };
+
+    const existing = findMcpConnection(agent);
+    if (existing) {
+      updateConnection(existing.id, { credentials: credentialData, enabled: true });
+      logError(CAT, `gcal-connect: updated connection ${existing.id}`);
+      jsonResponse(res, { connectionId: existing.id, action: "updated" });
+    } else {
+      const conn = addConnection("google", credentialData, {
+        direction: "bidirectional",
+        calendars: ["primary"],
+        conflict_resolution: "newest-wins",
+      });
+      logError(CAT, `gcal-connect: created connection ${conn.id}`);
+      jsonResponse(res, { connectionId: conn.id, action: "created" });
+    }
+    return true;
+  }
+
+  // ── POST /api/calendar/gcal-export ────────────────────────────────────
+  // Returns a local event formatted for Google Calendar API.
+  // Claude Code can use this to push events via MCP tools.
+  if (pathname === "/api/calendar/gcal-export" && method === "POST") {
+    const body = await parseBody(req);
+    const { eventId } = body;
+
+    if (!eventId) {
+      jsonResponse(res, { error: "eventId required" }, 400);
+      return true;
+    }
+
+    const event = getEventById(eventId);
+    if (!event) {
+      jsonResponse(res, { error: "Event not found" }, 404);
+      return true;
+    }
+
+    // Format for Google Calendar API
+    const gcalEvent = {
+      summary: event.title,
+      description: event.description || "",
+    };
+
+    if (event.allDay) {
+      const dateStr = event.startTime.split("T")[0];
+      gcalEvent.start = { date: dateStr };
+      gcalEvent.end = event.endTime
+        ? { date: event.endTime.split("T")[0] }
+        : { date: dateStr };
+    } else {
+      gcalEvent.start = { dateTime: event.startTime };
+      gcalEvent.end = event.endTime
+        ? { dateTime: event.endTime }
+        : { dateTime: event.startTime };
+    }
+
+    jsonResponse(res, {
+      event: gcalEvent,
+      localId: event.id,
+      googleCalendarId: event.googleCalendarId || null,
+    });
+    return true;
+  }
+
+  // ── POST /api/calendar/gcal-link ──────────────────────────────────────
+  // After Claude Code pushes an event to Google Calendar, call this to
+  // store the Google Calendar ID on the local event.
+  if (pathname === "/api/calendar/gcal-link" && method === "POST") {
+    const body = await parseBody(req);
+    const { localEventId, googleEventId } = body;
+
+    if (!localEventId || !googleEventId) {
+      jsonResponse(res, { error: "localEventId and googleEventId required" }, 400);
+      return true;
+    }
+
+    const gcalId = googleEventId.startsWith("mcp:") ? googleEventId : `mcp:${googleEventId}`;
+    const updated = updateCalendarEvent(localEventId, { googleCalendarId: gcalId });
+    if (!updated) {
+      jsonResponse(res, { error: "Event not found" }, 404);
+      return true;
+    }
+
+    logError(CAT, `gcal-link: ${localEventId} → ${gcalId}`);
+    jsonResponse(res, { linked: true, googleCalendarId: gcalId });
+    return true;
+  }
+
+  // ── POST /api/calendar/mcp-connect (legacy SSE pipeline) ──────────────
+  // Simplified: just checks CLI exists and creates connection record.
+  // No longer spawns agents to test calendar access.
+  if (pathname === "/api/calendar/mcp-connect" && method === "POST") {
+    const body = await parseBody(req);
+    const agent = body.agent || "claude";
+    const AGENT_LABELS = { claude: "Claude", codex: "Codex", gemini: "Gemini" };
+    const label = AGENT_LABELS[agent] || agent;
+
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
@@ -116,271 +399,139 @@ export async function handle(req, res, url) {
     });
 
     const sendStep = (step, status, detail) => {
-      try {
-        res.write(`data: ${JSON.stringify({ type: "step", step, status, detail })}\n\n`);
-      } catch {}
+      try { res.write(`data: ${JSON.stringify({ type: "step", step, status, detail })}\n\n`); } catch {}
     };
-
     const sendEvent = (type, data) => {
-      try {
-        res.write(`data: ${JSON.stringify({ type, data })}\n\n`);
-      } catch {}
+      try { res.write(`data: ${JSON.stringify({ type, data })}\n\n`); } catch {}
     };
 
-    // ── Step 1: Check Claude CLI ──────────────────────────────────────
-    sendStep(1, "running", "Checking Claude Code CLI...");
-    const claudeInstalled = await new Promise((resolve) => {
-      execFile("which", ["claude"], { timeout: 5000 }, (err, stdout) => {
-        resolve(err ? null : stdout.trim());
-      });
+    // Step 1: Check agent CLI
+    sendStep(1, "running", `Checking ${label} CLI...`);
+    const agentPath = await new Promise((resolve) => {
+      execFile("which", [agent], { timeout: 5000 }, (err, stdout) => resolve(err ? null : stdout.trim()));
     });
 
-    if (!claudeInstalled) {
-      sendStep(1, "failed", "Claude Code CLI not found in PATH.");
-      sendEvent("fix", { step: 1, message: "Install Claude Code CLI: npm install -g @anthropic-ai/claude-code" });
-      res.end();
-      return true;
-    }
-    sendStep(1, "passed", `Claude CLI found at ${claudeInstalled}`);
-
-    // ── Step 2: Check MCP servers ─────────────────────────────────────
-    sendStep(2, "running", "Checking MCP server configuration...");
-    const mcpList = await new Promise((resolve) => {
-      execFile("claude", ["mcp", "list"], {
-        timeout: 10000, encoding: "utf-8",
-      }, (err, stdout) => resolve(err ? "" : stdout));
-    });
-
-    const hasGcalMcp = mcpList.toLowerCase().includes("google") && mcpList.toLowerCase().includes("calendar");
-    if (!hasGcalMcp) {
-      sendStep(2, "failed", "Google Calendar MCP server not found.");
-      sendEvent("fix", { step: 2, message: "Add the Google Calendar MCP server to Claude. Run: claude mcp add google-calendar", command: "claude mcp add google-calendar" });
-      res.end();
-      return true;
-    }
-    sendStep(2, "passed", "Google Calendar MCP server is configured.");
-
-    // ── Step 3: Test calendar access ──────────────────────────────────
-    sendStep(3, "running", "Testing Google Calendar access (this may open a browser for sign-in)...");
-
-    const testResult = await new Promise((resolve) => {
-      const child = spawn("claude", [
-        "-p",
-        "Use the gcal_list_calendars MCP tool. Return ONLY a JSON array where each element has: {\"id\": \"...\", \"summary\": \"...\", \"primary\": true/false}. No other text.",
-      ], { timeout: 120000, env: { ...process.env } });
-
-      let stdout = "";
-      let stderr = "";
-
-      child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
-      child.stderr.on("data", (chunk) => {
-        stderr += chunk.toString();
-        // Stream stderr lines as progress (auth prompts show here)
-        const lines = chunk.toString().split(/\r?\n/).filter(Boolean);
-        for (const line of lines) {
-          if (line.includes("http") || line.includes("auth") || line.includes("browser") || line.includes("sign")) {
-            sendEvent("progress", line.slice(0, 200));
-          }
-        }
-      });
-
-      child.on("close", (code) => resolve({ code, stdout, stderr }));
-      child.on("error", (err) => resolve({ code: -1, stdout: "", stderr: err.message }));
-
-      // Timeout
-      setTimeout(() => { try { child.kill(); } catch {} }, 120000);
-    });
-
-    const allOutput = testResult.stdout + testResult.stderr;
-    const lower = allOutput.toLowerCase();
-
-    // Check for scope issues
-    if (lower.includes("insufficient") && lower.includes("scope")) {
-      sendStep(3, "failed", "Insufficient OAuth scopes. Your Google account is connected but missing Calendar permissions.");
+    if (!agentPath) {
+      sendStep(1, "failed", `${label} CLI not found in PATH.`);
       sendEvent("fix", {
-        step: 3,
-        message: "Reset MCP auth and reconnect with full Calendar permissions.",
-        action: "fix-scopes",
+        step: 1,
+        message: `Install ${label} CLI first.`,
+        command: agent === "claude" ? "npm install -g @anthropic-ai/claude-code" : `npm install -g @${agent === "codex" ? "openai/codex" : "google/gemini-cli"}`,
       });
       res.end();
       return true;
     }
+    sendStep(1, "passed", `${label} CLI found at ${agentPath}`);
 
-    // Check for auth needed
-    if (lower.includes("authenticate") || lower.includes("sign in") || lower.includes("authorization required") || lower.includes("credentials")) {
-      sendStep(3, "failed", "Google Calendar authentication required.");
-      sendEvent("fix", { step: 3, message: "Reset MCP auth to trigger a fresh Google sign-in.", action: "fix-scopes" });
+    // Step 2: Check for existing connection
+    sendStep(2, "running", "Checking connection status...");
+    const existing = findMcpConnection(agent);
+    if (existing) {
+      sendStep(2, "passed", "Existing connection found.");
+      sendStep(3, "passed", `Connected as ${existing.credentials?.user_email || agent}`);
+      sendEvent("done", { success: true, agent, connectionId: existing.id });
       res.end();
       return true;
     }
 
-    // Try to parse calendar list from output
-    let calendars = [];
-    try {
-      const cleaned = testResult.stdout.replace(/```(?:json)?\s*\n?/g, "").replace(/```\s*$/g, "");
-      const startIdx = cleaned.indexOf("[");
-      if (startIdx !== -1) {
-        let depth = 0;
-        for (let i = startIdx; i < cleaned.length; i++) {
-          if (cleaned[i] === "[") depth++;
-          if (cleaned[i] === "]") depth--;
-          if (depth === 0) {
-            calendars = JSON.parse(cleaned.slice(startIdx, i + 1));
-            break;
-          }
-        }
-      }
-    } catch {}
+    // Step 2 continued: No existing connection — guide user
+    sendStep(2, "passed", `${label} CLI is available.`);
+    sendStep(3, "running", "Ready for Google Calendar access...");
 
-    if (calendars.length > 0) {
-      const primary = calendars.find((c) => c.primary);
-      sendStep(3, "passed", `Access verified. Found ${calendars.length} calendar(s).`);
+    // Create a pending connection record
+    const conn = addConnection("google", {
+      auth_method: "mcp",
+      agent,
+      user_email: "",
+      calendar_count: "0",
+      calendars_json: "[]",
+      last_verified: null,
+      access_token: "mcp-managed",
+      refresh_token: "mcp-managed",
+    }, {
+      direction: "bidirectional",
+      calendars: ["primary"],
+      conflict_resolution: "newest-wins",
+    });
 
-      // ── Step 4: Done ──────────────────────────────────────────────────
-      sendStep(4, "passed", "Google Calendar connected successfully!");
-      sendEvent("done", {
-        success: true,
-        calendars,
-        userEmail: primary?.summary || primary?.id || null,
-      });
-    } else {
-      // Claude returned something but we couldn't parse calendars
-      sendStep(3, "failed", "Could not retrieve calendar list.");
-      sendEvent("fix", {
-        step: 3,
-        message: allOutput.slice(0, 300) || "Unknown error. Check Claude Code MCP configuration.",
-        raw: true,
-      });
-    }
+    sendStep(3, "passed", `Connection registered. Ask Claude to sync your Google Calendar.`);
+    sendStep(4, "passed", "Setup complete! Use 'Sync Now' to pull events via Claude.");
+    sendEvent("done", { success: true, agent, connectionId: conn.id, needsSync: true });
 
     res.end();
     return true;
   }
 
-  // ── POST /api/calendar/mcp-sync ─────────────────────────────────────
-  if (pathname === "/api/calendar/mcp-sync" && method === "POST") {
+  // ── GET /api/calendar/auto-sync ───────────────────────────────────────
+  // Returns the current auto-sync recurring event status.
+  if (pathname === "/api/calendar/auto-sync" && method === "GET") {
+    const ev = findAutoSyncEvent();
+    if (!ev) {
+      jsonResponse(res, { enabled: false, eventId: null, interval: "1h", recurrence: null });
+    } else {
+      // Reverse-lookup the interval key from the cron expression
+      const intervalKey = Object.entries(AUTO_SYNC_INTERVALS).find(
+        ([, cron]) => cron === ev.recurrence
+      )?.[0] || "1h";
+      jsonResponse(res, {
+        enabled: true,
+        eventId: ev.id,
+        interval: intervalKey,
+        recurrence: ev.recurrence,
+        status: ev.status,
+        lastRun: ev.execution?.endedAt || null,
+      });
+    }
+    return true;
+  }
+
+  // ── POST /api/calendar/auto-sync ──────────────────────────────────────
+  // Create or update the auto-sync recurring event.
+  // Body: { interval: "1h" | "2h" | "6h" | "12h" | "24h" | "30min" }
+  if (pathname === "/api/calendar/auto-sync" && method === "POST") {
     const body = await parseBody(req);
+    const interval = body.interval || "1h";
+    const recurrence = AUTO_SYNC_INTERVALS[interval] || AUTO_SYNC_INTERVALS["1h"];
 
-    // Pull events from Google Calendar into Open Canvas
-    if (body.action === "pull") {
-      const calendarId = body.calendarId || "primary";
-      const now = new Date();
-      const from = body.from || new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
-      const to = body.to || new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString();
-
-      log(CAT, `MCP pull: ${calendarId} from ${from} to ${to}`);
-      try {
-        const remoteEvents = await mcpListEvents(calendarId, from, to);
-        if (!Array.isArray(remoteEvents)) {
-          jsonResponse(res, { error: "Invalid response from Google Calendar" }, 500);
-          return true;
-        }
-
-        const localEvents = readEvents();
-        let pulled = 0;
-        let updated = 0;
-        const errors = [];
-
-        for (const remote of remoteEvents) {
-          try {
-            const externalRef = `mcp:${remote.id}`;
-            const existing = localEvents.find((e) => e.googleCalendarId === externalRef);
-
-            if (existing) {
-              updateCalendarEvent(existing.id, {
-                title: remote.summary || existing.title,
-                description: remote.description || existing.description,
-                startTime: remote.start || existing.startTime,
-                endTime: remote.end || existing.endTime,
-                allDay: remote.allDay || false,
-              });
-              updated++;
-            } else {
-              addCalendarEvent({
-                title: remote.summary || "(No title)",
-                description: remote.description || undefined,
-                startTime: remote.start || new Date().toISOString(),
-                endTime: remote.end || undefined,
-                allDay: remote.allDay || false,
-                source: { agent: "user" },
-                target: "user",
-                googleCalendarId: externalRef,
-                tags: ["synced"],
-              });
-              pulled++;
-            }
-          } catch (eventErr) {
-            errors.push(`Event "${remote.summary}": ${eventErr.message}`);
-          }
-        }
-
-        log(CAT, `MCP pull complete: ${pulled} new, ${updated} updated, ${errors.length} errors`);
-        jsonResponse(res, { pulled, updated, errors });
-      } catch (err) {
-        logError(CAT, "MCP pull failed:", err.message);
-        jsonResponse(res, { error: err.message }, 500);
-      }
-      return true;
+    const existing = findAutoSyncEvent();
+    if (existing) {
+      updateCalendarEvent(existing.id, { recurrence, status: "pending" });
+      log(CAT, `auto-sync: updated interval to ${interval} (${recurrence})`);
+      jsonResponse(res, { enabled: true, eventId: existing.id, interval, recurrence });
+    } else {
+      const ev = addCalendarEvent({
+        title: "Google Calendar Auto-Sync",
+        description: "Automatically syncs Google Calendar events to Open Canvas via Claude.",
+        startTime: new Date().toISOString(),
+        recurrence,
+        source: { agent: "user" },
+        target: "agent",
+        action: {
+          type: "prompt",
+          payload:
+            "Sync my Google Calendar to Open Canvas. List events for the next 14 days from all accessible calendars and import them.",
+          agent: "claude",
+        },
+        status: "pending",
+        tags: ["auto-sync", GCAL_AUTO_SYNC_TAG],
+      });
+      log(CAT, `auto-sync: created event ${ev.id} interval=${interval} (${recurrence})`);
+      jsonResponse(res, { enabled: true, eventId: ev.id, interval, recurrence });
     }
+    return true;
+  }
 
-    // Push a local event to Google Calendar
-    if (body.action === "push") {
-      const { eventId } = body;
-      if (!eventId) {
-        jsonResponse(res, { error: "eventId required" }, 400);
-        return true;
-      }
-
-      const event = getEventById(eventId);
-      if (!event) {
-        jsonResponse(res, { error: "Event not found" }, 404);
-        return true;
-      }
-
-      try {
-        const calendarId = body.calendarId || "primary";
-
-        if (event.googleCalendarId && event.googleCalendarId.startsWith("mcp:")) {
-          const remoteId = event.googleCalendarId.replace("mcp:", "");
-          await mcpUpdateEvent(calendarId, remoteId, event);
-          log(CAT, `MCP push-update: ${eventId} → ${remoteId}`);
-          jsonResponse(res, { pushed: true, action: "updated", googleCalendarId: event.googleCalendarId });
-        } else {
-          const result = await mcpCreateEvent(calendarId, event);
-          const gcalId = `mcp:${result.id}`;
-          updateCalendarEvent(eventId, { googleCalendarId: gcalId });
-          log(CAT, `MCP push-create: ${eventId} → ${result.id}`);
-          jsonResponse(res, { pushed: true, action: "created", googleCalendarId: gcalId });
-        }
-      } catch (err) {
-        logError(CAT, "MCP push failed:", err.message);
-        jsonResponse(res, { error: err.message }, 500);
-      }
-      return true;
+  // ── DELETE /api/calendar/auto-sync ────────────────────────────────────
+  // Remove the auto-sync recurring event.
+  if (pathname === "/api/calendar/auto-sync" && method === "DELETE") {
+    const ev = findAutoSyncEvent();
+    if (ev) {
+      deleteCalendarEvent(ev.id);
+      log(CAT, `auto-sync: removed event ${ev.id}`);
+      jsonResponse(res, { removed: true });
+    } else {
+      jsonResponse(res, { removed: false });
     }
-
-    // Delete a remote event
-    if (body.action === "push-delete") {
-      const { googleCalendarId } = body;
-      if (!googleCalendarId || !googleCalendarId.startsWith("mcp:")) {
-        jsonResponse(res, { error: "Valid googleCalendarId required" }, 400);
-        return true;
-      }
-
-      try {
-        const remoteId = googleCalendarId.replace("mcp:", "");
-        const calendarId = body.calendarId || "primary";
-        await mcpDeleteEvent(calendarId, remoteId);
-        log(CAT, `MCP push-delete: ${remoteId}`);
-        jsonResponse(res, { deleted: true });
-      } catch (err) {
-        logError(CAT, "MCP push-delete failed:", err.message);
-        jsonResponse(res, { error: err.message }, 500);
-      }
-      return true;
-    }
-
-    jsonResponse(res, { error: "action required (pull|push|push-delete)" }, 400);
     return true;
   }
 
@@ -388,13 +539,11 @@ export async function handle(req, res, url) {
   if (pathname === "/api/calendar/connections" && method === "POST") {
     const body = await parseBody(req);
 
-    // Update connection settings
     if (body.action === "update") {
       if (!body.connectionId) {
         jsonResponse(res, { error: "connectionId required" }, 400);
         return true;
       }
-      log(CAT, "Updating connection:", body.connectionId);
       const updated = updateConnection(body.connectionId, body.updates || {});
       if (!updated) {
         jsonResponse(res, { error: "Connection not found" }, 404);
@@ -404,13 +553,11 @@ export async function handle(req, res, url) {
       return true;
     }
 
-    // Remove connection
     if (body.action === "remove") {
       if (!body.connectionId) {
         jsonResponse(res, { error: "connectionId required" }, 400);
         return true;
       }
-      log(CAT, "Removing connection:", body.connectionId);
       const removed = removeConnection(body.connectionId);
       jsonResponse(res, { removed });
       return true;

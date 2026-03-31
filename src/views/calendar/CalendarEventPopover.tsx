@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   Clock,
   CheckCircle,
@@ -11,6 +12,9 @@ import {
   ExternalLink,
   Repeat,
   Pencil,
+  Upload,
+  Unlink,
+  Loader2,
 } from "lucide-react";
 import type { CalendarEvent } from "@/lib/CalendarContext";
 
@@ -57,6 +61,9 @@ interface CalendarEventPopoverProps {
   onDelete: (id: string) => void;
   onComplete: (id: string) => void;
   onEdit?: (event: CalendarEvent) => void;
+  onPushToGoogle?: (eventId: string) => Promise<boolean>;
+  onRemoveFromGoogle?: (eventId: string) => Promise<boolean>;
+  gcalAvailable?: boolean;
 }
 
 export function CalendarEventPopover({
@@ -66,9 +73,28 @@ export function CalendarEventPopover({
   onDelete,
   onComplete,
   onEdit,
+  onPushToGoogle,
+  onRemoveFromGoogle,
+  gcalAvailable,
 }: CalendarEventPopoverProps) {
+  const [syncing, setSyncing] = useState(false);
   const StatusIcon = STATUS_ICONS[event.status] || Clock;
   const TargetIcon = event.target === "agent" ? Bot : event.target === "both" ? Terminal : User;
+  const isSynced = !!event.googleCalendarId;
+
+  const handlePushToGoogle = async () => {
+    if (!onPushToGoogle) return;
+    setSyncing(true);
+    await onPushToGoogle(event.id);
+    setSyncing(false);
+  };
+
+  const handleRemoveFromGoogle = async () => {
+    if (!onRemoveFromGoogle) return;
+    setSyncing(true);
+    await onRemoveFromGoogle(event.id);
+    setSyncing(false);
+  };
 
   // Position the popover near the click, but keep it on screen
   const style: React.CSSProperties = {
@@ -189,9 +215,35 @@ export function CalendarEventPopover({
           </div>
         )}
 
+        {/* Google Calendar sync actions */}
+        {gcalAvailable && (
+          <div className="flex gap-2 pt-1 border-t border-[var(--border)]">
+            {!isSynced && onPushToGoogle && (
+              <button
+                onClick={handlePushToGoogle}
+                disabled={syncing}
+                className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg bg-purple-500/10 text-purple-400 hover:bg-purple-500/20 transition-colors disabled:opacity-50"
+              >
+                {syncing ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
+                Push to Google
+              </button>
+            )}
+            {isSynced && onRemoveFromGoogle && (
+              <button
+                onClick={handleRemoveFromGoogle}
+                disabled={syncing}
+                className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg bg-purple-500/10 text-purple-400 hover:bg-purple-500/20 transition-colors disabled:opacity-50"
+              >
+                {syncing ? <Loader2 size={12} className="animate-spin" /> : <Unlink size={12} />}
+                Unlink Google
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Actions */}
         <div className="flex gap-2 pt-1 border-t border-[var(--border)]">
-          {(event.status === "pending" || event.status === "failed") && onEdit && (
+          {onEdit && event.status !== "cancelled" && (
             <button
               onClick={() => { onEdit(event); onClose(); }}
               className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg bg-[var(--accent)]/10 text-[var(--accent)] hover:bg-[var(--accent)]/20 transition-colors"
@@ -200,7 +252,7 @@ export function CalendarEventPopover({
               Edit
             </button>
           )}
-          {event.status === "pending" && (
+          {(event.status === "pending" || event.status === "triggered") && (
             <button
               onClick={() => onComplete(event.id)}
               className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg bg-green-500/10 text-green-400 hover:bg-green-500/20 transition-colors"

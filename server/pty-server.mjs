@@ -89,7 +89,11 @@ const AGENT_COMMANDS = {
   codex: { shell: "/bin/zsh", args: ["-l", "-c", "codex"] },
   gemini: { shell: "/bin/zsh", args: ["-l", "-c", "gemini"] },
   shell: { shell: process.env.SHELL || "/bin/zsh", args: [] },
-  calendar: { shell: "/bin/zsh", args: ["-l", "-c", "claude"] }, // calendar agent uses claude
+  // calendar agent uses the active agent from config (defaults to claude)
+  get calendar() {
+    const active = loadConfig().agent?.active || "claude";
+    return { shell: "/bin/zsh", args: ["-l", "-c", active] };
+  },
 };
 
 // CLI flags that skip permission prompts per agent

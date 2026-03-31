@@ -51,16 +51,18 @@ interface CalendarSidebarProps {
 }
 
 export function CalendarSidebar({ events }: CalendarSidebarProps) {
-  // Show upcoming events (next 7 days, pending/triggered only)
+  // Show upcoming events (next 7 days, pending/triggered + synced Google events)
   const now = new Date();
   const weekLater = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
   const upcoming = events
     .filter((e) => {
       const start = new Date(e.startTime);
-      return start >= now && start <= weekLater && (e.status === "pending" || e.status === "triggered");
+      if (start < now || start > weekLater) return false;
+      // Show pending, triggered, and Google Calendar synced events
+      return e.status === "pending" || e.status === "triggered" || !!e.googleCalendarId;
     })
     .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime())
-    .slice(0, 10);
+    .slice(0, 12);
 
   // Group upcoming by date
   const grouped: Record<string, CalendarEvent[]> = {};
@@ -126,13 +128,20 @@ export function CalendarSidebar({ events }: CalendarSidebarProps) {
                     return (
                       <div
                         key={event.id}
-                        className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-[var(--bg-tertiary)] transition-colors group"
+                        className={`flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-[var(--bg-tertiary)] transition-colors group ${
+                          event.googleCalendarId ? "border-l-2 border-l-purple-500" : ""
+                        }`}
                       >
-                        <div className={`shrink-0 ${STATUS_STYLES[event.status]}`}>
+                        <div className={`shrink-0 ${STATUS_STYLES[event.status] || "text-[var(--text-muted)]"}`}>
                           <StatusIcon size={12} />
                         </div>
                         <div className="flex-1 min-w-0">
-                          <div className="text-xs font-medium truncate">{event.title}</div>
+                          <div className="text-xs font-medium truncate flex items-center gap-1">
+                            {event.title}
+                            {event.googleCalendarId && (
+                              <ExternalLink size={8} className="text-purple-400 shrink-0" />
+                            )}
+                          </div>
                           <div className="text-[10px] text-[var(--text-muted)]">
                             {event.allDay ? "All day" : formatTime(event.startTime)}
                           </div>

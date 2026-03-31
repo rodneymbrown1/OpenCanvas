@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
-import { ChevronLeft, ChevronRight, Plus, Calendar, LayoutGrid, Columns3, Clock } from "lucide-react";
+import { ChevronLeft, ChevronRight, Plus, Calendar, LayoutGrid, Columns3, Clock, RefreshCw, CloudOff, Check } from "lucide-react";
 import type { CalendarViewType } from "./useCalendarNav";
+import type { SyncStatus } from "@/lib/CalendarContext";
 
 function useLiveClock() {
   const [now, setNow] = useState(new Date());
@@ -17,6 +18,16 @@ const VIEW_OPTIONS: { id: CalendarViewType; label: string; icon: typeof Calendar
   { id: "timeGridDay", label: "Day", icon: Clock },
 ];
 
+function formatLastSync(iso: string | null): string {
+  if (!iso) return "Never";
+  const d = new Date(iso);
+  const now = new Date();
+  const diffMs = now.getTime() - d.getTime();
+  if (diffMs < 60_000) return "Just now";
+  if (diffMs < 3_600_000) return `${Math.floor(diffMs / 60_000)}m ago`;
+  return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
 interface CalendarToolbarProps {
   currentDate: Date;
   viewType: CalendarViewType;
@@ -26,6 +37,9 @@ interface CalendarToolbarProps {
   onToday: () => void;
   onNewEvent: () => void;
   eventCount: number;
+  syncStatus?: SyncStatus;
+  onSync?: () => void;
+  onGCalClick?: () => void;
 }
 
 export function CalendarToolbar({
@@ -37,6 +51,9 @@ export function CalendarToolbar({
   onToday,
   onNewEvent,
   eventCount,
+  syncStatus,
+  onSync,
+  onGCalClick,
 }: CalendarToolbarProps) {
   const liveClock = useLiveClock();
 
@@ -96,8 +113,46 @@ export function CalendarToolbar({
         </div>
       </div>
 
-      {/* Right: View switcher + new event */}
+      {/* Right: Sync status + View switcher + new event */}
       <div className="flex items-center gap-2">
+        {/* Google Calendar connection button */}
+        {syncStatus && (
+          <button
+            onClick={onGCalClick}
+            disabled={syncStatus.syncing}
+            title={syncStatus.gcalAvailable
+              ? `Google Calendar: ${syncStatus.syncing ? "Syncing..." : `Last sync: ${formatLastSync(syncStatus.lastSync)}`}`
+              : "Click to connect Google Calendar"
+            }
+            className={`flex items-center gap-1 px-2 py-1.5 text-xs rounded-lg border transition-colors ${
+              syncStatus.gcalAvailable
+                ? syncStatus.syncing
+                  ? "border-purple-500/30 text-purple-400 bg-purple-500/5"
+                  : syncStatus.error
+                  ? "border-orange-500/30 text-orange-400 bg-orange-500/5 hover:bg-orange-500/10"
+                  : "border-[var(--border)] text-[var(--text-muted)] hover:text-purple-400 hover:border-purple-500/30 hover:bg-purple-500/5"
+                : "border-[var(--border)] text-[var(--text-muted)] hover:text-purple-400 hover:border-purple-500/30 hover:bg-purple-500/5"
+            }`}
+          >
+            {syncStatus.syncing ? (
+              <RefreshCw size={12} className="animate-spin" />
+            ) : syncStatus.gcalAvailable && syncStatus.lastSync ? (
+              <Check size={12} className="text-green-400" />
+            ) : syncStatus.gcalAvailable ? (
+              <Calendar size={12} className="text-purple-400" />
+            ) : (
+              <CloudOff size={12} />
+            )}
+            <span className="hidden sm:inline">
+              {syncStatus.syncing
+                ? "Syncing"
+                : syncStatus.gcalAvailable && syncStatus.lastSync
+                ? formatLastSync(syncStatus.lastSync)
+                : "Google Calendar"}
+            </span>
+          </button>
+        )}
+
         <div className="flex rounded-lg border border-[var(--border)] overflow-hidden">
           {VIEW_OPTIONS.map((v) => (
             <button
