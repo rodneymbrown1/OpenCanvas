@@ -11,8 +11,8 @@ import os from "node:os";
 
 const HOME = os.homedir();
 const REGISTRY_PATH = path.join(HOME, ".open-canvas", "port-registry.json");
-export const RESERVED_PORTS = new Set([3000, 3001, 5173]);
-const DEFAULT_PORT_RANGE = { min: 3002, max: 9999 };
+export const RESERVED_PORTS = new Set([40000, 40001]);
+const DEFAULT_PORT_RANGE = { min: 41000, max: 49999 };
 const STALE_THRESHOLD_MS = 10 * 60 * 1000;
 
 // ── Read / Write ────────────────────────────────────────────────────────────

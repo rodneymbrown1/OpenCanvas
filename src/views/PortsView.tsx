@@ -18,7 +18,7 @@ function getPortCategory(port: number, label: string): { icon: typeof Globe; col
   if ([27017, 3306, 5432, 6379].includes(port)) return { icon: Database, color: "text-purple-400" };
   if ([9229].includes(port)) return { icon: Terminal, color: "text-yellow-400" };
   if (label.includes("PTY") || label.includes("Node")) return { icon: Terminal, color: "text-orange-400" };
-  if (port >= 3000 && port <= 9999) return { icon: Globe, color: "text-blue-400" };
+  if (port >= 41000 && port <= 49999) return { icon: Globe, color: "text-blue-400" };
   return { icon: Server, color: "text-[var(--text-muted)]" };
 }
 
@@ -113,7 +113,7 @@ export default function PortsView() {
           </p>
         </div>
         <div className="flex items-center gap-1 shrink-0">
-          {p.port >= 3000 && p.port <= 9999 && !p.label.includes("PTY") && !p.label.includes("debugger") && (
+          {p.port >= 41000 && p.port <= 49999 && !p.label.includes("PTY") && !p.label.includes("debugger") && (
             <a
               href={`http://localhost:${p.port}`}
               target="_blank"

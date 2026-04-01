@@ -23,7 +23,7 @@ export async function generateContextHandoff(
   fromAgent: string,
   toAgent: string,
   fromSessionId?: string,
-  ptyPort: number = 3001
+  ptyPort: number = 40001
 ): Promise<string> {
   const handoffDir = path.join(workDir, HANDOFF_DIR);
   fs.mkdirSync(handoffDir, { recursive: true });

@@ -67,7 +67,7 @@ run-config.yaml        # Service topology — defines how to start services (rea
 open-canvas.yaml       # Project config — agent settings, permissions (read only)
 \`\`\`
 
-## Key APIs (PTY server on localhost:3001)
+## Key APIs (PTY server on localhost:40001)
 
 - \`GET  /api/config\`         — read project config
 - \`GET  /api/skills?scope=project&cwd={path}\` — read skills

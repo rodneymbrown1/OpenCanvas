@@ -29,13 +29,14 @@ function jsonResponse(res, data, status = 200) {
 // ── Known ports label map ────────────────────────────────────────────────────
 const KNOWN_PORTS = {
   3000: "Next.js / React",
-  3001: "Open Canvas PTY Server",
-  3002: "Next.js (alt)",
+  3001: "Next.js (alt)",
   4200: "Angular",
   4321: "Astro",
   5000: "Flask / Vite preview",
-  5173: "Vite",
-  5174: "Vite (alt)",
+  5173: "Vite (external)",
+  5174: "Vite (external alt)",
+  40000: "Open Canvas UI",
+  40001: "Open Canvas PTY Server",
   5500: "Live Server",
   6006: "Storybook",
   8000: "Django / FastAPI / Python",
@@ -346,7 +347,7 @@ export async function handle(req, res, url) {
   // ── GET /api/pty-status ────────────────────────────────────────────────
   if (pathname === "/api/pty-status" && method === "GET") {
     const config = readConfig();
-    const port = config.server?.pty_port || 3001;
+    const port = config.server?.pty_port || 40001;
 
     const running = await new Promise((resolve) => {
       const sock = createConnection({ port, host: "127.0.0.1" }, () => {

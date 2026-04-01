@@ -11,7 +11,7 @@ export class ServiceManager {
   private runConfig: RunConfig;
   private ptyBaseUrl: string;
 
-  constructor(runConfig: RunConfig, ptyPort: number = 3001) {
+  constructor(runConfig: RunConfig, ptyPort: number = 40001) {
     this.runConfig = runConfig;
     this.ptyBaseUrl = `http://localhost:${ptyPort}`;
   }

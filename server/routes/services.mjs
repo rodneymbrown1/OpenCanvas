@@ -27,9 +27,9 @@ function json(res, data, status = 200) {
 function getPtyPort() {
   try {
     const config = readConfig();
-    return config.server?.pty_port || 3001;
+    return config.server?.pty_port || 40001;
   } catch {
-    return 3001;
+    return 40001;
   }
 }
 

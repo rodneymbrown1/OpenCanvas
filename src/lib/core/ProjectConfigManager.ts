@@ -41,7 +41,7 @@ export class ProjectConfigManager extends ConfigManager<OpenCanvasConfig> {
       mcp_servers: [],
       server: {
         port: 3000,
-        pty_port: 3001,
+        pty_port: 40001,
         auth_token: "",
       },
       preferences: {
@@ -74,7 +74,7 @@ export class ProjectConfigManager extends ConfigManager<OpenCanvasConfig> {
 
     const runConfig = runConfigMgr.read();
     const projectConfig = this.read();
-    const ptyPort = projectConfig.server?.pty_port || 3001;
+    const ptyPort = projectConfig.server?.pty_port || 40001;
 
     return new ServiceManager(runConfig, ptyPort);
   }

@@ -82,7 +82,7 @@ export const DEFAULT_APP_CONFIG: OpenCanvasConfig = {
   },
   api_keys: {},
   mcp_servers: [],
-  server: { port: 3000, pty_port: 3001, auth_token: "" },
+  server: { port: 3000, pty_port: 40001, auth_token: "" },
   preferences: { persist_jobs: true, default_stack: "", theme: "light" },
   session: {
     lastSessionId: null,

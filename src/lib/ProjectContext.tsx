@@ -70,7 +70,7 @@ interface ProjectContextType {
 const ProjectContext = createContext<ProjectContextType | null>(null);
 
 // Reserved ports that should never be auto-selected as app preview
-const RESERVED_PORTS = new Set([3000, 3001, 5173]);
+const RESERVED_PORTS = new Set([40000, 40001]);
 
 // ── Provider ─────────────────────────────────────────────────────────────────
 
@@ -324,7 +324,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
           const newPorts = ports.filter(
             (p) =>
               p.port >= 3000 &&
-              p.port <= 9999 &&
+              p.port <= 49999 &&
               !RESERVED_PORTS.has(p.port) &&
               !baselinePortsRef.current.has(p.port) &&
               (!p.projectName || p.projectName === currentProjectName)

@@ -31,7 +31,7 @@ function getTerminalTheme() {
 export function AgentTerminal({
   agent,
   cwd,
-  ptyPort = 3001,
+  ptyPort = 40001,
   sessionId,
   tabId,
   visible = true,

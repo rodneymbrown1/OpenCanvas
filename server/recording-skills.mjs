@@ -78,9 +78,9 @@ anywhere in the OC tree to fulfill the request.
 - Read project conventions: \`cat <project-path>/.open-canvas/skills.md\`
 - Read project architecture: \`cat <project-path>/.open-canvas/PROJECT.md\`
 - Check how to run a project: \`cat <project-path>/skills/run_app.md\`
-- Current calendar events: \`curl http://localhost:3001/api/calendar\`
+- Current calendar events: \`curl http://localhost:40001/api/calendar\`
 
-## Available APIs (localhost:3001)
+## Available APIs (localhost:40001)
 Use these where filesystem alone is insufficient:
 
 | API | Methods | Purpose |
@@ -117,34 +117,34 @@ User mentions scheduling, meetings, events, reminders, calendar, "tomorrow at", 
 
 ## How to Do It
 
-Use the Calendar API at localhost:3001. Do NOT manually edit calendar.yaml.
+Use the Calendar API at localhost:40001. Do NOT manually edit calendar.yaml.
 
 ### Create Event
 \`\`\`bash
-curl -X POST http://localhost:3001/api/calendar \\
+curl -X POST http://localhost:40001/api/calendar \\
   -H 'Content-Type: application/json' \\
   -d '{"action":"create","event":{"title":"...","startTime":"2026-03-28T15:00:00","endTime":"2026-03-28T16:00:00"}}'
 \`\`\`
 
 ### List Events
 \`\`\`bash
-curl http://localhost:3001/api/calendar
+curl http://localhost:40001/api/calendar
 # Filter by date range:
-curl 'http://localhost:3001/api/calendar?from=2026-03-28T00:00:00&to=2026-03-29T00:00:00'
+curl 'http://localhost:40001/api/calendar?from=2026-03-28T00:00:00&to=2026-03-29T00:00:00'
 # Filter by project:
-curl 'http://localhost:3001/api/calendar?project=<project-path>'
+curl 'http://localhost:40001/api/calendar?project=<project-path>'
 \`\`\`
 
 ### Update Event
 \`\`\`bash
-curl -X PUT http://localhost:3001/api/calendar/<id> \\
+curl -X PUT http://localhost:40001/api/calendar/<id> \\
   -H 'Content-Type: application/json' \\
   -d '{"event":{"title":"new title","startTime":"..."}}'
 \`\`\`
 
 ### Delete Event
 \`\`\`bash
-curl -X DELETE http://localhost:3001/api/calendar/<id>
+curl -X DELETE http://localhost:40001/api/calendar/<id>
 \`\`\`
 
 ## Agent Tasks (Action Events)
@@ -159,7 +159,7 @@ should run autonomously at the scheduled time, add an \`action\` object to the e
 
 ### Create an Agent Task
 \`\`\`bash
-curl -X POST http://localhost:3001/api/calendar \\
+curl -X POST http://localhost:40001/api/calendar \\
   -H 'Content-Type: application/json' \\
   -d '{"action":"create","event":{
     "title":"...",
@@ -177,7 +177,7 @@ curl -X POST http://localhost:3001/api/calendar \\
 
 ### Create a Reminder
 \`\`\`bash
-curl -X POST http://localhost:3001/api/calendar \\
+curl -X POST http://localhost:40001/api/calendar \\
   -H 'Content-Type: application/json' \\
   -d '{"action":"create","event":{
     "title":"...",
@@ -221,13 +221,13 @@ project health, or anything about managing their development projects.
 
 ### List All Projects
 \`\`\`bash
-curl http://localhost:3001/api/projects
+curl http://localhost:40001/api/projects
 \`\`\`
 Or directly: \`cat ~/.open-canvas/global.yaml\` and read the \`projects:\` array.
 
 ### Create a New Project
 \`\`\`bash
-curl -X POST http://localhost:3001/api/projects \\
+curl -X POST http://localhost:40001/api/projects \\
   -H 'Content-Type: application/json' \\
   -d '{"action":"create","name":"<project-name>"}'
 \`\`\`
@@ -254,7 +254,7 @@ This creates the standard structure at \`~/.open-canvas/projects/<slug>/\`:
 
 ### Register an External Project
 \`\`\`bash
-curl -X POST http://localhost:3001/api/projects \\
+curl -X POST http://localhost:40001/api/projects \\
   -H 'Content-Type: application/json' \\
   -d '{"action":"register","name":"...","path":"/absolute/path/to/project"}'
 \`\`\`
@@ -338,18 +338,18 @@ or wants to check on background tasks.
 
 ### List All Sessions
 \`\`\`bash
-curl http://localhost:3001/api/sessions
+curl http://localhost:40001/api/sessions
 \`\`\`
 Returns all sessions with: id, agent, status (running/completed/failed), cwd, startedAt, endedAt, exitCode.
 
 ### Get Session Details
 \`\`\`bash
-curl http://localhost:3001/api/sessions/<id>
+curl http://localhost:40001/api/sessions/<id>
 \`\`\`
 
 ### Get Session Output (last N lines)
 \`\`\`bash
-curl http://localhost:3001/api/sessions/<id>/output
+curl http://localhost:40001/api/sessions/<id>/output
 \`\`\`
 
 ### Check Session History
@@ -371,7 +371,7 @@ or anything about network port usage.
 
 ### List Port Allocations
 \`\`\`bash
-curl http://localhost:3001/api/ports
+curl http://localhost:40001/api/ports
 \`\`\`
 
 ### Check a Specific Port
@@ -386,12 +386,12 @@ lsof -ti :<port> | xargs kill
 
 ### Common Development Ports
 - 3000 — React / Next.js dev server
-- 3001 — Open Canvas PTY server (be careful with this one)
-- 5173 — Vite dev server
+- 40001 — Open Canvas PTY server (be careful with this one)
+- 40000 — Open Canvas Vite dev server
 - 8080 — Generic backend
 
 ## Rules
-- Do NOT kill the PTY server on port 3001 unless explicitly asked
+- Do NOT kill the PTY server on port 40001 unless explicitly asked
 - Always confirm what was killed and on which port
 - Check \`~/.open-canvas/port-registry.json\` for registered allocations
 `,
@@ -405,19 +405,19 @@ User asks about configuration, changing settings, preferences, defaults, or Open
 
 ### Read Current Config
 \`\`\`bash
-curl http://localhost:3001/api/config
+curl http://localhost:40001/api/config
 \`\`\`
 
 ### Update Config
 \`\`\`bash
-curl -X PATCH http://localhost:3001/api/config \\
+curl -X PATCH http://localhost:40001/api/config \\
   -H 'Content-Type: application/json' \\
   -d '{"key":"value"}'
 \`\`\`
 
 ### Read Settings
 \`\`\`bash
-curl http://localhost:3001/api/settings
+curl http://localhost:40001/api/settings
 \`\`\`
 
 ### Direct Config File
@@ -444,7 +444,7 @@ with independent statuses. This is intentional — they are orthogonal states.
 
 ## View Current Board
 \`\`\`bash
-curl http://localhost:3001/api/projects
+curl http://localhost:40001/api/projects
 # Look at "kanban": { "todo": [...], "in-progress": [...], "done": [...] }
 # Each item: { "type": "project"|"group", "id": "/path" or "uuid" }
 \`\`\`
@@ -452,12 +452,12 @@ curl http://localhost:3001/api/projects
 ## Add / Move to Column
 \`\`\`bash
 # Add or move a project to in-progress
-curl -X POST http://localhost:3001/api/projects \\
+curl -X POST http://localhost:40001/api/projects \\
   -H 'Content-Type: application/json' \\
   -d '{"action":"kanban-set","type":"project","id":"/path/to/project","status":"in-progress"}'
 
 # Add a group to done
-curl -X POST http://localhost:3001/api/projects \\
+curl -X POST http://localhost:40001/api/projects \\
   -H 'Content-Type: application/json' \\
   -d '{"action":"kanban-set","type":"group","id":"<group-uuid>","status":"done"}'
 \`\`\`
@@ -465,7 +465,7 @@ Note: a project/group can only be in ONE column. Moving it automatically removes
 
 ## Remove From Board
 \`\`\`bash
-curl -X POST http://localhost:3001/api/projects \\
+curl -X POST http://localhost:40001/api/projects \\
   -H 'Content-Type: application/json' \\
   -d '{"action":"kanban-set","type":"project","id":"/path/to/project","status":null}'
 \`\`\`
@@ -503,14 +503,14 @@ Projects themselves remain flat in the \`projects:\` array — groups just refer
 
 ### List All Groups (and which projects are in them)
 \`\`\`bash
-curl http://localhost:3001/api/projects
+curl http://localhost:40001/api/projects
 # Look at the "groups" array in the response
 \`\`\`
 Or directly: \`cat ~/.open-canvas/global.yaml\` and read the \`groups:\` array.
 
 ### Create a New Group
 \`\`\`bash
-curl -X POST http://localhost:3001/api/projects \\
+curl -X POST http://localhost:40001/api/projects \\
   -H 'Content-Type: application/json' \\
   -d '{"action":"create-group","name":"Clients","color":"#22c55e"}'
 \`\`\`
@@ -518,7 +518,7 @@ curl -X POST http://localhost:3001/api/projects \\
 ### Add a Project to a Group
 First find the group's id (from \`curl /api/projects\`), then:
 \`\`\`bash
-curl -X POST http://localhost:3001/api/projects \\
+curl -X POST http://localhost:40001/api/projects \\
   -H 'Content-Type: application/json' \\
   -d '{"action":"add-to-group","groupId":"<id>","projectPath":"/path/to/project"}'
 \`\`\`
@@ -526,21 +526,21 @@ Note: a project can only be in ONE group. Adding it to a new group automatically
 
 ### Remove a Project from Its Group (ungroup)
 \`\`\`bash
-curl -X POST http://localhost:3001/api/projects \\
+curl -X POST http://localhost:40001/api/projects \\
   -H 'Content-Type: application/json' \\
   -d '{"action":"remove-from-group","groupId":"<id>","projectPath":"/path/to/project"}'
 \`\`\`
 
 ### Rename or Recolor a Group
 \`\`\`bash
-curl -X POST http://localhost:3001/api/projects \\
+curl -X POST http://localhost:40001/api/projects \\
   -H 'Content-Type: application/json' \\
   -d '{"action":"update-group","groupId":"<id>","name":"New Name","color":"#6366f1"}'
 \`\`\`
 
 ### Delete a Group
 \`\`\`bash
-curl -X POST http://localhost:3001/api/projects \\
+curl -X POST http://localhost:40001/api/projects \\
   -H 'Content-Type: application/json' \\
   -d '{"action":"delete-group","groupId":"<id>"}'
 \`\`\`

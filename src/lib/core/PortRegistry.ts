@@ -10,8 +10,8 @@ import type {
 } from "./types";
 
 const REGISTRY_PATH = path.join(OC_HOME, "port-registry.json");
-const RESERVED_PORTS = new Set([3000, 3001]);
-const DEFAULT_PORT_RANGE = { min: 3002, max: 9999 };
+const RESERVED_PORTS = new Set([40000, 40001]);
+const DEFAULT_PORT_RANGE = { min: 41000, max: 49999 };
 const STALE_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

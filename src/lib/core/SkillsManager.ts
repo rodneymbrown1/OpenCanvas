@@ -44,12 +44,12 @@ This project is managed by Open Canvas. You have access to shared services.
 - Global config: \`~/.open-canvas/global.yaml\`
 - Calendar data: \`~/.open-canvas/calendar/\`
 - Shared data: \`~/.open-canvas/shared-data/\`
-- PTY server: \`http://localhost:3001\`
+- PTY server: \`http://localhost:40001\`
 
 ### Adding API Keys
 To add an API key to Open Canvas, send a PATCH request:
 \`\`\`
-PATCH http://localhost:3001/api/config/api-keys
+PATCH http://localhost:40001/api/config/api-keys
 Content-Type: application/json
 {"api_keys": {"key_name": "key_value"}}
 \`\`\`

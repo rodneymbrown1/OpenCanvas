@@ -78,12 +78,12 @@ function loadConfig() {
   try {
     return parse(readFileSync(APP_CONFIG_CACHE_PATH, "utf-8"));
   } catch {
-    return { server: { pty_port: 3001 } };
+    return { server: { pty_port: 40001 } };
   }
 }
 
 const config = loadConfig();
-const PORT = config.server?.pty_port || 3001;
+const PORT = config.server?.pty_port || 40001;
 
 const AGENT_COMMANDS = {
   claude: { shell: "/bin/zsh", args: ["-l", "-c", "claude"] },
@@ -348,7 +348,7 @@ const httpServer = http.createServer(async (req, res) => {
 4. If neither exists, look in the apps/ folder. Figure out what the app is, how it works, and start it. Then create a run.sh at the project root so it can be started faster next time.
 
 Important:
-- A PORT environment variable has been pre-allocated for this project. Use it — e.g. run.sh should use `exec npx vite --port "${PORT}" --host` or pass PORT to the framework. Do not use --port 0 or hardcode port 5173.
+- A PORT environment variable has been pre-allocated for this project. Use it — run.sh should pass it to the framework, e.g. "exec npx vite --port $PORT --host" or "PORT=$PORT npm start". Do not use --port 0 or hardcode port 5173.
 - Print the URL where the app is running once it starts.
 - Do not ask questions. Just figure it out and run it.
 - Your process has OC_PROJECT and OC_SERVICE env vars set. These tag the process for Open Canvas port management.`;
@@ -1276,7 +1276,7 @@ wss.on("connection", (ws) => {
                 const portMatch = line.match(/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d{4,5})/);
                 if (portMatch) {
                   const port = parseInt(portMatch[1], 10);
-                  if (port >= 3000 && port <= 9999 && port !== 3000 && port !== 3001) {
+                  if (port >= 1024 && port <= 65535 && !REGISTRY_RESERVED_PORTS.has(port)) {
                     session.detectedPort = port;
                     log("port", `session=${session.id} detected app port: ${port}`);
                   }

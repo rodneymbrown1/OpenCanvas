@@ -652,7 +652,7 @@ export async function handle(req, res, url) {
 
     const linkBack = isUpdate
       ? `(already linked — no gcal-link call needed)`
-      : `Then immediately POST http://localhost:3001/api/calendar/gcal-link with body: {"localEventId":"${eventId}","googleEventId":"<id from the MCP response>"}`;
+      : `Then immediately POST http://localhost:40001/api/calendar/gcal-link with body: {"localEventId":"${eventId}","googleEventId":"<id from the MCP response>"}`;
 
     const prompt = [
       `Push an Open Canvas calendar event to Google Calendar.`,
