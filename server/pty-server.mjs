@@ -40,6 +40,7 @@ import {
   releaseProject as registryReleaseProject,
   allocatePort as registryAllocatePort,
   getProjectPorts as registryGetProjectPorts,
+  RESERVED_PORTS as REGISTRY_RESERVED_PORTS,
 } from "./port-registry.mjs";
 
 // ── API Route Modules (migrated from Next.js API routes) ──────────────────
@@ -190,7 +191,8 @@ function createSession(agent, cwd) {
     outputLines: 0,
     pid: null,
     lastOutput: [],    // Last 20 lines of clean text
-    detectedPort: null, // Port detected from output (e.g., "localhost:3002")
+    detectedPort: null,   // Port detected from stdout (confirms app is live)
+    allocatedPort: null,  // Port pre-allocated by registry before spawn (known immediately)
     logs: [],          // Structured lifecycle events [{ts, event, detail}]
   };
   sessions.set(id, session);
@@ -346,7 +348,7 @@ const httpServer = http.createServer(async (req, res) => {
 4. If neither exists, look in the apps/ folder. Figure out what the app is, how it works, and start it. Then create a run.sh at the project root so it can be started faster next time.
 
 Important:
-- Use dynamic port allocation. Never hardcode port numbers. Use PORT=0 or let the framework pick a random available port.
+- A PORT environment variable has been pre-allocated for this project. Use it — e.g. run.sh should use `exec npx vite --port "${PORT}" --host` or pass PORT to the framework. Do not use --port 0 or hardcode port 5173.
 - Print the URL where the app is running once it starts.
 - Do not ask questions. Just figure it out and run it.
 - Your process has OC_PROJECT and OC_SERVICE env vars set. These tag the process for Open Canvas port management.`;
@@ -355,7 +357,7 @@ Important:
   if (req.url === "/stack/start" && req.method === "POST") {
     let body = "";
     req.on("data", (chunk) => { body += chunk; });
-    req.on("end", () => {
+    req.on("end", async () => {
       try {
         const { agent, cwd } = JSON.parse(body);
         if (!agent || !cwd) {
@@ -398,6 +400,24 @@ Important:
         log("pty", `app-start: spawning ${agentName} session=${session.id} cwd=${cwd}`);
 
         const projectName = path.basename(cwd);
+
+        // Use the canonical service name from run-config.yaml when present so
+        // the pre-allocation matches the services-path entry (Fix 4).
+        let primaryServiceName = "app";
+        try {
+          const rcPath = path.join(cwd, "run-config.yaml");
+          if (fs.existsSync(rcPath)) {
+            const rc = parse(fs.readFileSync(rcPath, "utf-8"));
+            const names = Object.keys(rc.services || {});
+            if (names.length > 0) primaryServiceName = names[0];
+          }
+        } catch {}
+
+        // Pre-allocate a port and inject it so run.sh / the agent can use $PORT
+        const allocatedPort = await registryAllocatePort(projectName, cwd, primaryServiceName, "web");
+        session.allocatedPort = allocatedPort;
+        log("port", `app-start: pre-allocated port=${allocatedPort} service=${primaryServiceName} project=${projectName}`);
+
         const ptyProcess = pty.spawn(agentDef.shell, agentDef.args, {
           name: "xterm-256color",
           cols: 120,
@@ -409,6 +429,8 @@ Important:
             COLORTERM: "truecolor",
             OC_PROJECT: projectName,
             OC_SERVICE: "app",
+            PORT: String(allocatedPort),
+            OC_PORT: String(allocatedPort),
           },
         });
 
@@ -473,7 +495,7 @@ Important:
               const portMatch = line.match(/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d{4,5})/);
               if (portMatch) {
                 const port = parseInt(portMatch[1], 10);
-                if (port >= 1024 && port <= 65535 && port !== 3000 && port !== 3001) {
+                if (port >= 1024 && port <= 65535 && !REGISTRY_RESERVED_PORTS.has(port)) {
                   session.detectedPort = port;
                   log("port", `app-start session=${session.id} detected port: ${port}`);
                   // Register in port registry (same as services path)

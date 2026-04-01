@@ -20,6 +20,7 @@ interface PortInfo {
   port: number;
   pid: number;
   command: string;
+  projectName?: string;  // set by /api/ports when port is in the registry
 }
 
 export interface DataFileEntry {
@@ -69,7 +70,7 @@ interface ProjectContextType {
 const ProjectContext = createContext<ProjectContextType | null>(null);
 
 // Reserved ports that should never be auto-selected as app preview
-const RESERVED_PORTS = new Set([3000, 3001]);
+const RESERVED_PORTS = new Set([3000, 3001, 5173]);
 
 // ── Provider ─────────────────────────────────────────────────────────────────
 
@@ -180,12 +181,22 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
               startupLog: s.lastOutput || prev.startupLog,
             };
 
-            if (s.detectedPort && !prev.appPort) {
+            // Registry-first: port is known before the app is ready — show
+            // loading iframe immediately instead of waiting for stdout detection.
+            if (s.allocatedPort && !prev.appPort) {
+              updates.appPort = s.allocatedPort;
+              updates.appStatus = "building";
+            }
+
+            // Promote to "running" once stdout confirms the port is live.
+            // Use !== "running" so this fires even when appPort is already set
+            // from the allocatedPort path above.
+            if (s.detectedPort && prev.appStatus !== "running") {
               updates.appPort = s.detectedPort;
               updates.appStatus = "running";
             }
 
-            if (!s.detectedPort && !prev.appPort && prev.appStatus !== "building") {
+            if (!s.allocatedPort && !s.detectedPort && !prev.appPort && prev.appStatus !== "building") {
               updates.appStatus = "building";
             }
 
@@ -284,10 +295,11 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         if (!res.ok || cancelled) return;
         const data = await res.json();
         const ports: PortInfo[] = (data.ports || []).map(
-          (p: { port: number; pid: number; command: string }) => ({
+          (p: { port: number; pid: number; command: string; projectName?: string }) => ({
             port: p.port,
             pid: p.pid,
             command: p.command || "",
+            projectName: p.projectName,
           })
         );
 
@@ -302,13 +314,20 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         setState((prev) => {
           const currentPortSet = new Set(ports.map((p) => p.port));
 
-          // Find new ports (not baseline, not reserved, in dev range)
+          // Find new ports (not baseline, not reserved, in dev range).
+          // Registry ownership check: if a port is registered to a *different*
+          // project, skip it — prevents Project B's lsof scan from claiming
+          // Project A's port when both apps are running simultaneously.
+          const currentProjectName = session.workDir
+            ? session.workDir.split("/").pop()
+            : "";
           const newPorts = ports.filter(
             (p) =>
               p.port >= 3000 &&
               p.port <= 9999 &&
               !RESERVED_PORTS.has(p.port) &&
-              !baselinePortsRef.current.has(p.port)
+              !baselinePortsRef.current.has(p.port) &&
+              (!p.projectName || p.projectName === currentProjectName)
           );
 
           let nextAppPort = prev.appPort;
