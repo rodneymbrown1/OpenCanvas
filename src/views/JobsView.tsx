@@ -11,6 +11,9 @@ import {
   Mic,
   Cpu,
   ArrowDownUp,
+  Square,
+  Pause,
+  Play,
 } from "lucide-react";
 import { useJobs, type Job } from "@/lib/JobsContext";
 
@@ -106,9 +109,12 @@ function MiniTerminal({
 
 function JobCard({ job, defaultExpanded }: { job: Job; defaultExpanded?: boolean }) {
   const [expanded, setExpanded] = useState(defaultExpanded || false);
+  const { killJob, pauseJob } = useJobs();
   const isRunning = job.status === "running";
+  const isPaused = !!job.paused;
 
   const statusIcon = () => {
+    if (isRunning && isPaused) return <Pause size={16} className="text-yellow-400" />;
     switch (job.status) {
       case "running":
         return <Activity size={16} className="text-[var(--accent)] animate-pulse" />;
@@ -129,6 +135,7 @@ function JobCard({ job, defaultExpanded }: { job: Job; defaultExpanded?: boolean
   };
 
   const statusLabel = () => {
+    if (isRunning && isPaused) return "Paused";
     switch (job.status) {
       case "running": return "Running";
       case "completed": return "Completed";
@@ -187,11 +194,31 @@ function JobCard({ job, defaultExpanded }: { job: Job; defaultExpanded?: boolean
             {formatDuration(job.startedAt, job.endedAt)}
           </p>
           <p className={`text-[10px] mt-0.5 ${
+            isRunning && isPaused ? "text-yellow-400 font-medium" :
             isRunning ? "text-[var(--accent)] font-medium" : "text-[var(--text-muted)]"
           }`}>
             {statusLabel()}
           </p>
         </div>
+
+        {isRunning && (
+          <div className="flex items-center gap-1 shrink-0 ml-1" onClick={(e) => e.stopPropagation()}>
+            <button
+              onClick={() => pauseJob(job.id, !isPaused)}
+              title={isPaused ? "Resume" : "Pause"}
+              className="p-1.5 rounded-lg hover:bg-yellow-400/15 text-yellow-400 transition-colors"
+            >
+              {isPaused ? <Play size={14} /> : <Pause size={14} />}
+            </button>
+            <button
+              onClick={() => killJob(job.id)}
+              title="Kill"
+              className="p-1.5 rounded-lg hover:bg-[var(--error)]/15 text-[var(--error)] transition-colors"
+            >
+              <Square size={14} />
+            </button>
+          </div>
+        )}
       </button>
 
       {/* Expanded details */}

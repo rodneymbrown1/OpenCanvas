@@ -15,6 +15,7 @@ export function OpenCanvasSettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saved, setSaved] = useState(false);
   const [shuttingDown, setShuttingDown] = useState(false);
+  const [showShutdownConfirm, setShowShutdownConfirm] = useState(false);
 
   useEffect(() => {
     fetch("/api/settings/global")
@@ -36,13 +37,19 @@ export function OpenCanvasSettingsPage() {
         body: JSON.stringify({ app_settings: settings }),
       });
 
-      // Sync logger immediately so the change takes effect without reload
+      // Sync verbose flag immediately — prints confirmation to console
       if (settings.verbose_logging) {
-        localStorage.setItem("oc-verbose", "true");
+        logger.enable();
       } else {
-        localStorage.removeItem("oc-verbose");
+        logger.disable();
       }
-      logger.sync();
+
+      // Sync poll debug flag immediately
+      if (settings.poll_debug_logging) {
+        logger.enablePollDebug();
+      } else {
+        logger.disablePollDebug();
+      }
 
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -52,11 +59,15 @@ export function OpenCanvasSettingsPage() {
     }
   };
 
-  const shutdown = async () => {
-    if (!confirm("Shut down Open Canvas? This will stop the server and close all sessions.")) return;
+  const shutdown = async (killApps: boolean) => {
     setShuttingDown(true);
+    setShowShutdownConfirm(false);
     try {
-      await fetch("/api/settings/shutdown", { method: "POST" });
+      await fetch("/api/settings/shutdown", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ killApps }),
+      });
     } catch {
       // Expected — server shuts down, connection drops
     }
@@ -116,6 +127,37 @@ export function OpenCanvasSettingsPage() {
             </p>
           </div>
         </label>
+
+        <label className="flex items-center gap-3 cursor-pointer">
+          <button
+            onClick={() =>
+              setSettings((s) => ({ ...s, poll_debug_logging: !s.poll_debug_logging }))
+            }
+            className={`relative w-10 h-5 rounded-full transition-colors ${
+              settings.poll_debug_logging
+                ? "bg-[var(--accent)]"
+                : "bg-[var(--bg-tertiary)] border border-[var(--border)]"
+            }`}
+          >
+            <span
+              className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                settings.poll_debug_logging ? "translate-x-5" : ""
+              }`}
+            />
+          </button>
+          <div>
+            <span className="text-sm text-[var(--text-secondary)]">
+              Poll Debug Logging
+            </span>
+            <p className="text-xs text-[var(--text-muted)]">
+              Logs every poll cycle for the jobs, stack, services, ports, and
+              file-tree loops — timing, skips, backoff delays, and tab-resume events.
+            </p>
+            <p className="text-xs text-[var(--text-muted)] mt-0.5">
+              Env var: <code className="text-[var(--accent)]">VITE_POLL_DEBUG</code>
+            </p>
+          </div>
+        </label>
       </section>
 
       {/* Environment info */}
@@ -161,18 +203,52 @@ export function OpenCanvasSettingsPage() {
           <div>
             <p className="text-sm text-[var(--text-secondary)]">Shut Down Open Canvas</p>
             <p className="text-xs text-[var(--text-muted)] mt-1">
-              Stops the server, closes all active terminal sessions, and shuts down the application.
-              You will need to restart manually from the command line.
+              Stops the PTY server (port 40001) and Vite (port 40000). You will need to
+              restart manually from the command line.
             </p>
           </div>
-          <button
-            onClick={shutdown}
-            disabled={shuttingDown}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-red-500/30 bg-red-500/10 text-red-400 text-sm hover:bg-red-500/20 transition-colors disabled:opacity-50"
-          >
-            <Power size={14} />
-            {shuttingDown ? "Shutting down..." : "Shut Down"}
-          </button>
+
+          {!showShutdownConfirm ? (
+            <button
+              onClick={() => setShowShutdownConfirm(true)}
+              disabled={shuttingDown}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg border border-red-500/30 bg-red-500/10 text-red-400 text-sm hover:bg-red-500/20 transition-colors disabled:opacity-50"
+            >
+              <Power size={14} />
+              {shuttingDown ? "Shutting down..." : "Shut Down"}
+            </button>
+          ) : (
+            <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-4 space-y-3">
+              <p className="text-sm font-medium text-[var(--text-secondary)]">
+                Also kill running project apps?
+              </p>
+              <p className="text-xs text-[var(--text-muted)]">
+                Project apps running on ports 41000–49999 can be left running or
+                shut down together with Open Canvas.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => shutdown(true)}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-red-500 text-white text-xs font-medium hover:bg-red-600 transition-colors"
+                >
+                  <Power size={12} />
+                  Shut Down Everything
+                </button>
+                <button
+                  onClick={() => shutdown(false)}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-red-500/30 bg-red-500/10 text-red-400 text-xs hover:bg-red-500/20 transition-colors"
+                >
+                  Open Canvas Only
+                </button>
+                <button
+                  onClick={() => setShowShutdownConfirm(false)}
+                  className="px-3 py-1.5 rounded-lg text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </section>
     </div>

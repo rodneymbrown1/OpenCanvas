@@ -27,22 +27,30 @@ export default function PortsView() {
   const [ports, setPorts] = useState<PortInfo[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const fetchPorts = useCallback(async () => {
-    setLoading(true);
+  const fetchPorts = useCallback(async (showSpinner = true) => {
+    if (showSpinner) setLoading(true);
     try {
-      const res = await fetch("/api/ports");
+      const res = await fetch("/api/ports", {
+        signal: AbortSignal.timeout(10000), // never hang forever — lsof timeout is 5s + buffer
+      });
       if (res.ok) {
         const data = await res.json();
         setPorts(data.ports || []);
       }
-    } catch {}
-    setLoading(false);
+    } catch (err) {
+      // AbortError = timed out; log it but don't crash
+      if (err instanceof Error && err.name === "AbortError") {
+        console.warn("[PortsView] /api/ports timed out after 10s");
+      }
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   const [killing, setKilling] = useState<number | null>(null);
 
   useEffect(() => {
-    fetchPorts();
+    fetchPorts(true); // show spinner on initial mount
   }, [fetchPorts]);
 
   const killPort = async (pid: number, port: number) => {
@@ -143,7 +151,7 @@ export default function PortsView() {
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold">Ports</h1>
         <button
-          onClick={fetchPorts}
+          onClick={() => fetchPorts(false)} // keep existing data visible while re-scanning
           disabled={loading}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[var(--bg-secondary)] border border-[var(--border)] text-xs text-[var(--text-secondary)] hover:border-[var(--accent)] transition-colors"
         >

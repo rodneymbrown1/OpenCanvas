@@ -105,6 +105,14 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   const baselineTakenRef = useRef(false);
   const candidatePortRef = useRef<number | null>(null);
 
+  // Shared visibility-resume trigger for all three poll loops
+  const resumePollRef = useRef<(() => void) | null>(null);
+
+  // Per-loop consecutive error counters for exponential backoff
+  const stackErrorsRef = useRef(0);
+  const servicesErrorsRef = useRef(0);
+  const portsErrorsRef = useRef(0);
+
   // ── Reset state when project (workDir) changes ─────────────────────────────
   const prevWorkDirRef = useRef(session.workDir);
 
@@ -167,21 +175,45 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     }
   }, [session.workDir]);
 
+  // ONE shared visibility listener — resumes all three poll loops when tab becomes visible
+  useEffect(() => {
+    function onVisible() {
+      if (!document.hidden && resumePollRef.current) resumePollRef.current();
+    }
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, []);
+
   // ── Stack session polling (checks dedicated stack session for port + log) ─
 
   useEffect(() => {
     if (!session.workDir) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    const prevResume = resumePollRef.current;
+
+    function schedule(delayMs: number) {
+      if (cancelled) return;
+      timer = setTimeout(pollStack, delayMs);
+    }
 
     async function pollStack() {
       if (cancelled) return;
+      if (document.hidden) { logger.poll("stack: skipped — tab hidden"); return; }
+      logger.poll("stack: poll start", { errors: stackErrorsRef.current, appStatus: stateRef.current.appStatus });
       const controller = new AbortController();
       try {
         const res = await fetch(`/api/stack?cwd=${encodeURIComponent(session.workDir)}`, {
           signal: controller.signal,
         });
-        if (!res.ok || cancelled) return;
+        if (!res.ok || cancelled) {
+          stackErrorsRef.current++;
+          const delay = Math.min(1500 * Math.pow(2, stackErrorsRef.current), 30000);
+          logger.pollWarn(`stack: ${res.status} — backing off ${delay}ms`, { errors: stackErrorsRef.current });
+          schedule(delay);
+          return;
+        }
+        stackErrorsRef.current = 0;
         const data = await res.json();
 
         if (data.running && data.session) {
@@ -191,47 +223,48 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
               stackSessionId: s.id,
               startupLog: s.lastOutput || prev.startupLog,
             };
-
-            // Only advance appPort when stdout confirms the port is live.
-            // allocatedPort is reserved but not yet listening — showing the
-            // iframe on it produces "Cannot preview app" errors.
-            if (s.detectedPort && prev.appStatus !== "running") {
+            if (s.detectedPort && s.detectedPort !== prev.appPort) {
               updates.appPort = s.detectedPort;
               updates.appStatus = "running";
-              // Reset appReady so the readiness probe re-confirms the new port
-              if (s.detectedPort !== prev.appPort) updates.appReady = false;
+              updates.appReady = false;
+            } else if (s.detectedPort && prev.appStatus !== "running") {
+              updates.appStatus = "running";
             }
-
             if (!s.detectedPort && !prev.appPort && prev.appStatus !== "building") {
               updates.appStatus = "building";
             }
-
             return { ...prev, ...updates };
           });
         } else {
-          setState((prev) => {
-            if (prev.stackSessionId) {
-              return { ...prev, stackSessionId: null };
-            }
-            return prev;
-          });
+          setState((prev) => prev.stackSessionId ? { ...prev, stackSessionId: null } : prev);
         }
       } catch {
-        // ignore (AbortError or network error)
-      } finally {
         if (!cancelled) {
-          // Adaptive delay: fast while starting, slow once running
-          const status = stateRef.current.appStatus;
-          const delay = (status === "initializing" || status === "building") ? 1500 : 8000;
-          timer = setTimeout(pollStack, delay);
+          stackErrorsRef.current++;
+          const delay = Math.min(1500 * Math.pow(2, stackErrorsRef.current), 30000);
+          logger.pollWarn(`stack: network error — backing off ${delay}ms`, { errors: stackErrorsRef.current });
+          schedule(delay);
+          return;
         }
       }
+      if (!cancelled) {
+        const status = stateRef.current.appStatus;
+        const delay = (status === "initializing" || status === "building") ? 1500 : 8000;
+        logger.poll(`stack: ok — next poll in ${delay}ms`, { appStatus: status });
+        schedule(delay);
+      }
     }
+
+    function resume() {
+      if (!cancelled) { logger.poll("stack: tab visible — resuming poll"); if (timer) clearTimeout(timer); pollStack(); }
+    }
+    resumePollRef.current = () => { prevResume?.(); resume(); };
 
     pollStack();
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
+      resumePollRef.current = prevResume ?? null;
     };
   }, [session.workDir]);
 
@@ -241,23 +274,39 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     if (!session.workDir) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    const prevResume = resumePollRef.current;
+
+    function getBaseDelay() {
+      const { appStatus, runConfigExists } = stateRef.current;
+      if (!runConfigExists && appStatus === "idle") return 15000;
+      return (appStatus === "initializing" || appStatus === "building") ? 2000 : 8000;
+    }
+    function schedule(delayMs: number) {
+      if (cancelled) return;
+      timer = setTimeout(pollServices, delayMs);
+    }
 
     async function pollServices() {
       if (cancelled) return;
+      if (document.hidden) { logger.poll("services: skipped — tab hidden"); return; }
+      logger.poll("services: poll start", { errors: servicesErrorsRef.current, appStatus: stateRef.current.appStatus });
       const controller = new AbortController();
       try {
         const res = await fetch(`/api/services?cwd=${encodeURIComponent(session.workDir)}`, {
           signal: controller.signal,
         });
-        if (!res.ok || cancelled) return;
+        if (!res.ok || cancelled) {
+          servicesErrorsRef.current++;
+          schedule(Math.min(getBaseDelay() * Math.pow(2, servicesErrorsRef.current), 30000));
+          return;
+        }
+        servicesErrorsRef.current = 0;
         const data = await res.json();
 
         setState((prev) => {
           const services = (data.services || {}) as Record<string, ServiceStatusInfo>;
           const hasRunConfig = !!data.hasRunConfig;
           const startOrder = data.startOrder || [];
-
-          // Find the primary port from the first running "web" service
           let primaryPort: number | null = prev.appPort;
           if (hasRunConfig && Object.keys(services).length > 0) {
             const webService = Object.values(services).find(
@@ -266,7 +315,6 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
             if (webService?.port && !prev.appPort) {
               primaryPort = webService.port;
             }
-            // If any service is running, override appStatus
             const anyRunning = Object.values(services).some((s) => s.state === "running");
             if (anyRunning && prev.appStatus !== "running") {
               return {
@@ -276,12 +324,10 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
                 startOrder,
                 appPort: primaryPort,
                 appStatus: "running",
-                // Reset appReady so probe re-confirms the new port
                 appReady: primaryPort === prev.appPort ? prev.appReady : false,
               };
             }
           }
-
           return {
             ...prev,
             services,
@@ -291,26 +337,31 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
           };
         });
       } catch {
-        // /api/services not available or request aborted — ignore
-      } finally {
         if (!cancelled) {
-          // Fast poll only during active startup; skip entirely if no run-config
-          const { appStatus, runConfigExists } = stateRef.current;
-          if (!runConfigExists && appStatus === "idle") {
-            // No run-config — check infrequently
-            timer = setTimeout(pollServices, 15000);
-          } else {
-            const delay = (appStatus === "initializing" || appStatus === "building") ? 2000 : 8000;
-            timer = setTimeout(pollServices, delay);
-          }
+          servicesErrorsRef.current++;
+          const delay = Math.min(getBaseDelay() * Math.pow(2, servicesErrorsRef.current), 30000);
+          logger.pollWarn(`services: network error — backing off ${delay}ms`, { errors: servicesErrorsRef.current });
+          schedule(delay);
+          return;
         }
       }
+      if (!cancelled) {
+        const delay = getBaseDelay();
+        logger.poll(`services: ok — next poll in ${delay}ms`);
+        schedule(delay);
+      }
     }
+
+    function resume() {
+      if (!cancelled) { logger.poll("services: tab visible — resuming poll"); if (timer) clearTimeout(timer); pollServices(); }
+    }
+    resumePollRef.current = () => { prevResume?.(); resume(); };
 
     pollServices();
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
+      resumePollRef.current = prevResume ?? null;
     };
   }, [session.workDir]);
 
@@ -318,11 +369,30 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const prevResume = resumePollRef.current;
+
+    function schedule(delayMs: number) {
+      if (cancelled) return;
+      timer = setTimeout(pollPorts, delayMs);
+    }
 
     async function pollPorts() {
+      if (cancelled) return;
+      if (document.hidden) { logger.poll("ports: skipped — tab hidden"); return; }
+      logger.poll("ports: poll start", { errors: portsErrorsRef.current, appStatus: stateRef.current.appStatus });
+      const controller = new AbortController();
       try {
-        const res = await fetch("/api/ports");
-        if (!res.ok || cancelled) return;
+        const res = await fetch("/api/ports", { signal: controller.signal });
+        if (!res.ok || cancelled) {
+          portsErrorsRef.current++;
+          const base = stateRef.current.appStatus === "running" ? 10000 : 3000;
+          const delay = Math.min(base * Math.pow(2, portsErrorsRef.current), 30000);
+          logger.pollWarn(`ports: ${res.status} — backing off ${delay}ms`, { errors: portsErrorsRef.current });
+          schedule(delay);
+          return;
+        }
+        portsErrorsRef.current = 0;
         const data = await res.json();
         const ports: PortInfo[] = (data.ports || []).map(
           (p: { port: number; pid: number; command: string; projectName?: string }) => ({
@@ -343,17 +413,10 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
 
         setState((prev) => {
           const currentPortSet = new Set(ports.map((p) => p.port));
-
-          // Find new ports (not baseline, not reserved, in dev range).
-          // Registry ownership check: if a port is registered to a *different*
-          // project, skip it — prevents Project B's lsof scan from claiming
-          // Project A's port when both apps are running simultaneously.
-          const currentProjectName = session.workDir
-            ? session.workDir.split("/").pop()
-            : "";
+          const currentProjectName = session.workDir ? session.workDir.split("/").pop() : "";
           const newPorts = ports.filter(
             (p) =>
-              p.port >= 3000 &&
+              p.port >= 41000 &&
               p.port <= 49999 &&
               !RESERVED_PORTS.has(p.port) &&
               !baselinePortsRef.current.has(p.port) &&
@@ -363,15 +426,12 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
           let nextAppPort = prev.appPort;
           let nextAppStatus = prev.appStatus;
 
-          // Single-poll confirmation — no debounce. The lsof scan only returns
-          // listening ports so a port appearing once is reliable enough.
           if (newPorts.length > 0 && !prev.appPort) {
             nextAppPort = newPorts[0].port;
             nextAppStatus = "running";
             candidatePortRef.current = null;
           }
 
-          // App port disappeared
           if (prev.appPort && !currentPortSet.has(prev.appPort)) {
             nextAppPort = null;
             nextAppStatus = prev.appStatus === "running" ? "idle" : prev.appStatus;
@@ -383,27 +443,36 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
             detectedPorts: ports,
             appPort: nextAppPort,
             appStatus: nextAppStatus,
-            // Reset appReady when port changes so probe re-confirms
             appReady: nextAppPort !== prev.appPort ? false : prev.appReady,
           };
         });
       } catch {
-        // API not available or request aborted — ignore
-      } finally {
         if (!cancelled) {
-          // Slow down once an app is running — lsof scan is expensive
-          const status = stateRef.current.appStatus;
-          const delay = status === "running" ? 10000 : 3000;
-          timer = setTimeout(pollPorts, delay);
+          portsErrorsRef.current++;
+          const base = stateRef.current.appStatus === "running" ? 10000 : 3000;
+          const delay = Math.min(base * Math.pow(2, portsErrorsRef.current), 30000);
+          logger.pollWarn(`ports: network error — backing off ${delay}ms`, { errors: portsErrorsRef.current });
+          schedule(delay);
+          return;
         }
+      }
+      if (!cancelled) {
+        const delay = stateRef.current.appStatus === "running" ? 10000 : 3000;
+        logger.poll(`ports: ok — next poll in ${delay}ms`, { appStatus: stateRef.current.appStatus });
+        schedule(delay);
       }
     }
 
-    let timer: ReturnType<typeof setTimeout> | null = null;
+    function resume() {
+      if (!cancelled) { logger.poll("ports: tab visible — resuming poll"); if (timer) clearTimeout(timer); pollPorts(); }
+    }
+    resumePollRef.current = () => { prevResume?.(); resume(); };
+
     pollPorts();
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
+      resumePollRef.current = prevResume ?? null;
     };
   }, [session.agentConnected]);
 

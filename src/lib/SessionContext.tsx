@@ -97,6 +97,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   // ── Persist to per-project localStorage on every state change ───────────
   useEffect(() => {
     if (typeof window === "undefined") return;
+    // Don't persist the initial empty-workDir state — hydration hasn't run yet.
+    // Writing {workDir:''} to "oc-session" would overwrite the correct project
+    // session, causing the second StrictMode mount to read an empty workDir.
+    if (!session.workDir) return;
     const key = storageKey(session.workDir);
     localStorage.setItem(key, JSON.stringify(session));
     // Also update generic key as fallback

@@ -20,6 +20,7 @@ export interface Job {
   outputBytes: number;
   inputBytes: number;
   pid: number | null;
+  paused?: boolean;
   prompt?: string; // The speech-to-text prompt that triggered this job
   lastOutput?: string[]; // Last ~20 lines of clean agent output
   logs?: Array<{ ts: string; event: string; detail?: string }>;
@@ -33,6 +34,10 @@ interface JobsContextType {
   spawnVoiceJob: (prompt: string, targetSessionId?: string) => Promise<void>;
   /** Whether a voice job is currently being spawned */
   spawning: boolean;
+  /** Kill a running job (SIGTERM → SIGKILL) */
+  killJob: (id: string) => Promise<void>;
+  /** Pause a running job (SIGSTOP) or resume it (SIGCONT) */
+  pauseJob: (id: string, paused: boolean) => Promise<void>;
 }
 
 const JobsContext = createContext<JobsContextType | null>(null);
@@ -46,6 +51,8 @@ export function JobsProvider({ children }: { children: ReactNode }) {
   const [spawning, setSpawning] = useState(false);
 
   const lastJobsHash = useRef("");
+  const consecutiveErrorsRef = useRef(0);
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fetchJobs = useCallback(async () => {
     try {
       const res = await fetch("/api/sessions");
@@ -76,12 +83,97 @@ export function JobsProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    fetchJobs();
-    const interval = setInterval(fetchJobs, 2000);
-    return () => clearInterval(interval);
-  }, [fetchJobs]);
+    let cancelled = false;
+
+    function schedulePoll(delayMs: number) {
+      if (cancelled) return;
+      pollTimerRef.current = setTimeout(runPoll, delayMs);
+    }
+
+    async function runPoll() {
+      if (cancelled) return;
+      if (document.hidden) {
+        logger.poll("jobs: skipped — tab hidden");
+        return;
+      }
+      logger.poll("jobs: poll start", { errors: consecutiveErrorsRef.current });
+      try {
+        await fetchJobs();
+        consecutiveErrorsRef.current = 0;
+      } catch {
+        consecutiveErrorsRef.current++;
+      }
+      if (cancelled) return;
+      const hasActive = jobs.some((j) => j.status === "running");
+      const baseDelay = hasActive ? 2000 : 8000;
+      const backoff = Math.min(baseDelay * Math.pow(2, consecutiveErrorsRef.current), 30000);
+      const nextDelay = consecutiveErrorsRef.current > 0 ? backoff : baseDelay;
+      if (consecutiveErrorsRef.current > 0) {
+        logger.pollWarn(`jobs: error — backing off ${nextDelay}ms`, { errors: consecutiveErrorsRef.current });
+      } else {
+        logger.poll(`jobs: ok — next poll in ${nextDelay}ms`, { hasActive });
+      }
+      schedulePoll(nextDelay);
+    }
+
+    function onVisible() {
+      if (cancelled) return;
+      logger.poll("jobs: tab visible — resuming poll");
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+      runPoll();
+    }
+
+    document.addEventListener("visibilitychange", onVisible);
+    runPoll();
+    return () => {
+      cancelled = true;
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [fetchJobs, jobs]);
 
   const activeJobs = jobs.filter((j) => j.status === "running");
+
+  const killJob = useCallback(async (id: string) => {
+    logger.context(`JobsContext: killJob → session=${id}`);
+    try {
+      const res = await fetch(`/api/sessions/${id}/kill`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        logger.error("context", `killJob: server error session=${id}`, data);
+        toast(data.error || "Failed to kill job", { type: "error" });
+        return;
+      }
+      logger.context(`JobsContext: killJob ✓ session=${id}`);
+      fetchJobs();
+    } catch (err) {
+      logger.error("context", `killJob: fetch failed session=${id}`, err);
+      toast("Failed to kill job", { type: "error" });
+    }
+  }, [fetchJobs, toast]);
+
+  const pauseJob = useCallback(async (id: string, paused: boolean) => {
+    const signal = paused ? "SIGSTOP" : "SIGCONT";
+    logger.context(`JobsContext: pauseJob → session=${id} signal=${signal}`);
+    try {
+      const res = await fetch(`/api/sessions/${id}/signal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ signal }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        logger.error("context", `pauseJob: server error session=${id}`, data);
+        toast(data.error || "Failed to pause/resume job", { type: "error" });
+        return;
+      }
+      logger.context(`JobsContext: pauseJob ✓ session=${id} paused=${data.paused}`);
+      fetchJobs();
+    } catch (err) {
+      logger.error("context", `pauseJob: fetch failed session=${id}`, err);
+      toast("Failed to pause/resume job", { type: "error" });
+    }
+  }, [fetchJobs, toast]);
 
   const spawnVoiceJob = useCallback(
     async (prompt: string, targetSessionId?: string) => {
@@ -190,6 +282,8 @@ export function JobsProvider({ children }: { children: ReactNode }) {
         activeCount: activeJobs.length,
         spawnVoiceJob,
         spawning,
+        killJob,
+        pauseJob,
       }}
     >
       {children}

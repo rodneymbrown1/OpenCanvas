@@ -50,6 +50,7 @@ export interface GlobalPermissions {
 
 export interface AppSettings {
   verbose_logging: boolean;
+  poll_debug_logging?: boolean;
 }
 
 export interface GlobalConfig {
@@ -80,6 +81,7 @@ export const SHARED_DATA_DIR = path.join(OC_HOME, "shared-data");
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   verbose_logging: false,
+  poll_debug_logging: false,
 };
 
 const DEFAULT_GLOBAL_CONFIG: GlobalConfig = {

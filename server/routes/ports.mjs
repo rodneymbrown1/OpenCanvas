@@ -60,8 +60,10 @@ const KNOWN_PORTS = {
 // ── Cached async port scanner ────────────────────────────────────────────────
 let cachedPorts = [];
 let cacheTimestamp = 0;
-const CACHE_TTL_MS = 3000;
+const CACHE_TTL_MS = 10000; // 10s — matches port poll interval; lsof is expensive (~1-3s on macOS)
 let scanInFlight = null;
+let scanInFlightStart = 0;
+const SCAN_HANG_TIMEOUT_MS = 8000; // if lsof doesn't resolve in 8s, assume it hung and reset
 
 function parseLsofOutput(output) {
   const ports = [];
@@ -132,8 +134,17 @@ function scanPortsAsync() {
     return Promise.resolve(cachedPorts);
   }
 
-  if (scanInFlight) return scanInFlight;
+  // If a scan is already in-flight but has been running too long, it's hung — reset it
+  if (scanInFlight) {
+    if (Date.now() - scanInFlightStart < SCAN_HANG_TIMEOUT_MS) {
+      return scanInFlight;
+    }
+    // Hung scan detected — discard it and start fresh
+    console.warn(`[pty-server] lsof scan hung (>${SCAN_HANG_TIMEOUT_MS}ms) — resetting`);
+    scanInFlight = null;
+  }
 
+  scanInFlightStart = Date.now();
   scanInFlight = new Promise((resolve) => {
     const platform = process.platform;
 
@@ -144,6 +155,7 @@ function scanPortsAsync() {
         (err, stdout) => {
           scanInFlight = null;
           if (err) {
+            console.warn(`[pty-server] lsof error/timeout (${Date.now() - scanInFlightStart}ms):`, err.message);
             resolve(cachedPorts);
             return;
           }
@@ -190,14 +202,13 @@ export async function handle(req, res, url) {
     const ports = await scanPortsAsync();
 
     try {
-      const reg = new PortRegistry();
-
+      // Use the module-level singleton — avoids a readFileSync on every poll
       pollCount++;
       if (pollCount % 10 === 0) {
-        reg.cleanupStale();
+        registry.cleanupStale();
       }
 
-      const allocations = reg.getAllocations();
+      const allocations = registry.getAllocations();
       const allocMap = new Map(allocations.map((a) => [a.port, a]));
 
       for (const p of ports) {
@@ -206,7 +217,7 @@ export async function handle(req, res, url) {
           p.projectName = alloc.projectName;
           p.serviceName = alloc.serviceName;
           if (alloc.status === "running") {
-            reg.updateLastSeen(p.port);
+            registry.updateLastSeen(p.port);
           }
         }
       }

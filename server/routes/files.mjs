@@ -453,17 +453,26 @@ async function handleLinkFile(req, res) {
 
     const linkPath = path.join(targetDir, path.basename(source));
 
+    // Resolve any existing symlinks so we always point at the real file,
+    // avoiding chains when linking from a project that itself has linked data.
+    let realSource = source;
+    try {
+      realSource = fs.realpathSync(source);
+    } catch {
+      // If realpath fails, fall back to the original path
+    }
+
     if (fs.existsSync(linkPath)) {
       fs.unlinkSync(linkPath);
     }
 
     try {
-      fs.symlinkSync(source, linkPath);
+      fs.symlinkSync(realSource, linkPath);
     } catch {
-      fs.copyFileSync(source, linkPath);
+      fs.copyFileSync(realSource, linkPath);
     }
 
-    json(res, { linked: true, source, linkPath });
+    json(res, { linked: true, source: realSource, linkPath });
   } catch (err) {
     json(res, { error: err instanceof Error ? err.message : "Link failed" }, 500);
   }

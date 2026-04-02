@@ -40,6 +40,7 @@ interface FileExplorerProps {
   dragMode?: "move" | "link";
   onLinkDrop?: (source: string, targetDir: string) => void;
   onOpenGlobalPicker?: (targetDir: string) => void;
+  onOpenProjectPicker?: (targetDir: string) => void;
   readOnly?: boolean;
   pollInterval?: number;
 }
@@ -453,7 +454,7 @@ function FileTreeNode({ entry, depth }: { entry: FileEntry; depth: number }) {
 
 // ── Main FileExplorer ───────────────────────────────────────────────────────
 
-export function FileExplorer({ onFilePreview, onFileEdit, rootDir, dragMode, onLinkDrop, onOpenGlobalPicker, readOnly, pollInterval }: FileExplorerProps) {
+export function FileExplorer({ onFilePreview, onFileEdit, rootDir, dragMode, onLinkDrop, onOpenGlobalPicker, onOpenProjectPicker, readOnly, pollInterval }: FileExplorerProps) {
   const { setView } = useView();
   const { toast } = useToast();
   const [tree, setTree] = useState<FileEntry[]>([]);
@@ -529,9 +530,44 @@ export function FileExplorer({ onFilePreview, onFileEdit, rootDir, dragMode, onL
   // Polling for auto-refresh
   useEffect(() => {
     if (!pollInterval || pollInterval <= 0) return;
-    const interval = setInterval(() => fetchTree(true), pollInterval);
-    return () => clearInterval(interval);
-  }, [pollInterval, fetchTree]);
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    function schedule() {
+      if (cancelled) return;
+      timer = setTimeout(run, pollInterval);
+    }
+
+    async function run() {
+      if (cancelled) return;
+      if (document.hidden) {
+        logger.poll("files: skipped — tab hidden");
+        schedule();
+        return;
+      }
+      logger.poll(`files: poll start (interval=${pollInterval}ms)`);
+      await fetchTree(true).catch(() => {});
+      logger.poll("files: poll done");
+      schedule();
+    }
+
+    function onVisible() {
+      if (cancelled) return;
+      logger.poll("files: tab visible — resuming poll");
+      if (timer) clearTimeout(timer);
+      run();
+    }
+
+    document.addEventListener("visibilitychange", onVisible);
+    schedule();
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pollInterval]);
 
   useEffect(() => { const h = () => setContextMenu(null); window.addEventListener("click", h); return () => window.removeEventListener("click", h); }, []);
 
@@ -1017,6 +1053,9 @@ export function FileExplorer({ onFilePreview, onFileEdit, rootDir, dragMode, onL
             )}
             {contextMenu.entry.type === "directory" && onOpenGlobalPicker && !readOnly && (
               <button onClick={() => { onOpenGlobalPicker(contextMenu.entry.path); setContextMenu(null); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[var(--accent)] hover:bg-[var(--bg-tertiary)]"><Database size={13} /> Link Global Data</button>
+            )}
+            {contextMenu.entry.type === "directory" && onOpenProjectPicker && !readOnly && (
+              <button onClick={() => { onOpenProjectPicker(contextMenu.entry.path); setContextMenu(null); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[var(--accent)] hover:bg-[var(--bg-tertiary)]"><Link2 size={13} /> Link Project Data</button>
             )}
             <button onClick={() => { navigator.clipboard.writeText(contextMenu.entry.path); setContextMenu(null); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"><ExternalLink size={13} /> Copy Path</button>
             <button onClick={() => { fetch("/api/files/reveal", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: contextMenu.entry.path }) }); setContextMenu(null); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"><FolderSearch size={13} /> Reveal in Finder</button>

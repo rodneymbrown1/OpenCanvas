@@ -21,7 +21,8 @@ type LogCategory =
   | "session"
   | "project"
   | "git"
-  | "calendar";
+  | "calendar"
+  | "poll";
 
 const CATEGORY_COLORS: Record<LogCategory, string> = {
   page: "#4ade80",      // green
@@ -34,6 +35,7 @@ const CATEGORY_COLORS: Record<LogCategory, string> = {
   project: "#34d399",   // emerald
   git: "#f472b6",       // pink
   calendar: "#06b6d4",  // cyan
+  poll: "#e879f9",      // fuchsia
 };
 
 function isVerbose(): boolean {
@@ -47,6 +49,22 @@ function isVerbose(): boolean {
   if (typeof window !== "undefined") {
     try {
       return localStorage.getItem("oc-verbose") === "true";
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+function isPollDebug(): boolean {
+  try {
+    if (import.meta.env?.VITE_POLL_DEBUG === "true") return true;
+  } catch {
+    // import.meta.env not available (e.g. in tests)
+  }
+  if (typeof window !== "undefined") {
+    try {
+      return localStorage.getItem("oc-poll-debug") === "true";
     } catch {
       return false;
     }
@@ -68,6 +86,14 @@ function syncFromServer() {
         } else if (!import.meta.env?.VITE_VERBOSE_LOG) {
           // Only clear if env var isn't forcing it on
           localStorage.removeItem("oc-verbose");
+        }
+      }
+      const pollFlag = data.app_settings?.poll_debug_logging;
+      if (typeof pollFlag === "boolean") {
+        if (pollFlag) {
+          localStorage.setItem("oc-poll-debug", "true");
+        } else if (!import.meta.env?.VITE_POLL_DEBUG) {
+          localStorage.removeItem("oc-poll-debug");
         }
       }
     })
@@ -94,6 +120,21 @@ function warn(category: LogCategory, message: string, ...data: unknown[]) {
   } else {
     console.warn(prefix, message);
   }
+}
+
+function logPoll(message: string, ...data: unknown[]) {
+  if (!isPollDebug()) return;
+  const style = "color:#e879f9;font-weight:bold";
+  if (data.length > 0) {
+    console.log("%c[OC:POLL]", style, message, ...data);
+  } else {
+    console.log("%c[OC:POLL]", style, message);
+  }
+}
+
+function warnPoll(message: string, ...data: unknown[]) {
+  if (!isPollDebug()) return;
+  console.warn("[OC:POLL]", message, ...data);
 }
 
 function error(category: LogCategory, message: string, ...data: unknown[]) {
@@ -128,12 +169,44 @@ export const logger = {
   /** Log calendar connection & sync operations */
   calendar: (message: string, ...data: unknown[]) => log("calendar", message, ...data),
 
+  /** Log poll loop events (jobs, stack, services, ports, file-tree, terminal retry) */
+  poll: (message: string, ...data: unknown[]) => logPoll(message, ...data),
+  /** Poll warnings (skips, backoff) */
+  pollWarn: (message: string, ...data: unknown[]) => warnPoll(message, ...data),
+
   /** Warnings (only when verbose) */
   warn: (category: LogCategory, message: string, ...data: unknown[]) =>
     warn(category, message, ...data),
   /** Errors (always logged) */
   error: (category: LogCategory, message: string, ...data: unknown[]) =>
     error(category, message, ...data),
+
+  /** Enable poll debug logging (persists to both localStorage and server config) */
+  enablePollDebug: () => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("oc-poll-debug", "true");
+      fetch("/api/settings/global", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ app_settings: { poll_debug_logging: true } }),
+      }).catch(() => {});
+      console.log("%c[OC] Poll debug logging enabled", "color:#e879f9;font-weight:bold");
+    }
+  },
+  /** Disable poll debug logging (persists to both localStorage and server config) */
+  disablePollDebug: () => {
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("oc-poll-debug");
+      fetch("/api/settings/global", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ app_settings: { poll_debug_logging: false } }),
+      }).catch(() => {});
+      console.log("%c[OC] Poll debug logging disabled", "color:#f87171;font-weight:bold");
+    }
+  },
+  /** Check if poll debug logging is active */
+  isPollDebugEnabled: isPollDebug,
 
   /** Enable verbose logging (persists to both localStorage and server config) */
   enable: () => {
@@ -169,4 +242,18 @@ export const logger = {
 if (typeof window !== "undefined") {
   (window as unknown as Record<string, unknown>).__ocLogger = logger;
   syncFromServer();
+  // Quick-start hint in console
+  const hint = [
+    "📋 OC Logger: window.__ocLogger",
+    "  .enable() / .disable()         → verbose logging",
+    "  .enablePollDebug() / .disablePollDebug() → poll loop logging",
+  ].join("\n");
+  if (typeof console !== "undefined") {
+    // Only print hint when neither flag is active
+    try {
+      if (import.meta.env?.DEV && !localStorage.getItem("oc-verbose") && !localStorage.getItem("oc-poll-debug")) {
+        console.debug("%c" + hint, "color:#6b7280;font-size:10px");
+      }
+    } catch {}
+  }
 }

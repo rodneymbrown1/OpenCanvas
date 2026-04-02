@@ -99,7 +99,7 @@ export function SpeechToTextButton() {
         });
       }, 100);
     }
-  }, [isRecording, spawnVoiceJob, targetSessionId]);
+  }, [isRecording, isSpeechSupported, spawnVoiceJob, targetSessionId]);
 
   return (
     <div className="relative" ref={previewRef}>

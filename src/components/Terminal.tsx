@@ -4,6 +4,12 @@ import { Terminal as XTerminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
+import { Mic, AlertTriangle } from "lucide-react";
+import SpeechToElementImport from "speech-to-element";
+import { logger } from "@/lib/logger";
+
+const SpeechToElement =
+  (SpeechToElementImport as any).default || SpeechToElementImport;
 
 interface TerminalProps {
   agent: "claude" | "codex" | "gemini" | "shell";
@@ -49,6 +55,60 @@ export function AgentTerminal({
   const MAX_RETRIES = 3;
   const gotOutputRef = useRef(false);
   const gotSessionRef = useRef(false);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── Speech-to-text ────────────────────────────────────────────────────────
+  const [isRecording, setIsRecording] = useState(false);
+  const [speechError, setSpeechError] = useState<string | null>(null);
+  const [isSpeechSupported, setIsSpeechSupported] = useState(false);
+  const [liveTranscript, setLiveTranscript] = useState("");
+  const speechTextRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setIsSpeechSupported(
+      !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)
+    );
+  }, []);
+
+  const handleMicToggle = useCallback(() => {
+    if (isRecording) {
+      SpeechToElement.stop();
+      setIsRecording(false);
+      const text = speechTextRef.current?.textContent?.trim() || "";
+      if (text && wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: "input", data: text + "\n" }));
+      }
+      if (speechTextRef.current) speechTextRef.current.textContent = "";
+      setLiveTranscript("");
+    } else {
+      setSpeechError(null);
+      setLiveTranscript("");
+      if (speechTextRef.current) speechTextRef.current.textContent = "";
+
+      if (!isSpeechSupported) {
+        setSpeechError("Speech recognition not supported. Use Chrome or Edge.");
+        return;
+      }
+
+      setTimeout(() => {
+        SpeechToElement.toggle("webspeech", {
+          element: speechTextRef.current!,
+          displayInterimResults: true,
+          textColor: {
+            interim: "var(--text-muted)",
+            final: "var(--text-primary)",
+          },
+          onStart: () => setIsRecording(true),
+          onStop: () => setIsRecording(false),
+          onResult: (text: string) => setLiveTranscript(text),
+          onError: (err: string) => {
+            setIsRecording(false);
+            setSpeechError(err || "Microphone access denied.");
+          },
+        });
+      }, 100);
+    }
+  }, [isRecording, isSpeechSupported]);
 
   // Store callbacks in refs to prevent useCallback dependency changes
   // that would cause the connect effect to re-run and create loops
@@ -218,17 +278,29 @@ export function AgentTerminal({
         );
       }
 
-      // Case 2: Reconnecting to stale session
+      // Case 2: Reconnecting to stale session — retry with backoff
       if (sessionId && !gotOutputRef.current) {
         retriesRef.current++;
         log("warn", `Reconnect attempt ${retriesRef.current}/${MAX_RETRIES} failed`);
         if (retriesRef.current >= MAX_RETRIES) {
           log("error", "Max retries — clearing stale session");
+          logger.poll(`terminal: max retries (${MAX_RETRIES}) — giving up on session ${sessionId}`);
           term.writeln(
             `\x1b[31m[Open Canvas]\x1b[0m Session ${sessionId} is no longer available.`
           );
-          onReconnectFailedRef.current?.();
-          retriesRef.current = 0;
+          retryTimerRef.current = setTimeout(() => {
+            if (mountedRef.current) {
+              onReconnectFailedRef.current?.();
+            }
+            retriesRef.current = 0;
+          }, 500);
+        } else {
+          const backoffDelay = Math.min(1000 * Math.pow(2, retriesRef.current - 1), 4000);
+          log("warn", `Retrying in ${backoffDelay}ms`);
+          logger.poll(`terminal: reconnect retry ${retriesRef.current}/${MAX_RETRIES} — backing off ${backoffDelay}ms`, { sessionId });
+          retryTimerRef.current = setTimeout(() => {
+            if (mountedRef.current) connect();
+          }, backoffDelay);
         }
       }
 
@@ -287,6 +359,7 @@ export function AgentTerminal({
     return () => {
       mountedRef.current = false;
       cleanup?.();
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
       termRef.current?.dispose();
       if (wsRef.current?.readyState === WebSocket.OPEN) {
         wsRef.current.close();
@@ -330,7 +403,7 @@ export function AgentTerminal({
 
   return (
     <div className="flex flex-col h-full w-full overflow-hidden">
-      <div className="flex items-center justify-between px-3 py-1.5 bg-[var(--bg-secondary)] border-b border-[var(--border)]">
+      <div className={`flex items-center justify-between px-3 py-1.5 border-b border-[var(--border)] transition-colors ${isRecording ? "bg-red-500/10" : "bg-[var(--bg-secondary)]"}`}>
         <div className="flex items-center gap-2">
           <span className="text-xs font-medium text-[var(--text-secondary)]">
             TERMINAL
@@ -338,6 +411,31 @@ export function AgentTerminal({
           <span className="text-xs text-[var(--text-muted)]">{agent}</span>
         </div>
         <div className="flex items-center gap-2">
+          {/* Live transcript shown inline while recording */}
+          {(isRecording || liveTranscript) && (
+            <span className="text-xs text-[var(--text-muted)] max-w-[200px] truncate italic">
+              {liveTranscript || "Listening..."}
+            </span>
+          )}
+          {speechError && !isRecording && (
+            <span className="flex items-center gap-1 text-xs text-red-400" title={speechError}>
+              <AlertTriangle size={11} />
+              Mic error
+            </span>
+          )}
+          {/* Hidden div that speech-to-element writes into */}
+          <div ref={speechTextRef} className="hidden" />
+          <button
+            onClick={handleMicToggle}
+            title={isRecording ? "Click to stop & send" : "Speak to terminal"}
+            className={`flex items-center justify-center w-6 h-6 rounded transition-all ${
+              isRecording
+                ? "recording-glow text-red-400"
+                : "text-[var(--text-muted)] hover:text-[var(--accent)] hover:bg-[var(--bg-tertiary)]"
+            }`}
+          >
+            <Mic size={12} />
+          </button>
           <span
             className={`w-2 h-2 rounded-full ${
               connected ? "bg-[var(--success)]" : "bg-[var(--text-muted)]"

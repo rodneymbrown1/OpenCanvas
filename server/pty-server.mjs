@@ -63,6 +63,8 @@ import { handle as handleUpdates } from "./routes/updates.mjs";
 import { handle as handleGithubAuth } from "./routes/github-auth.mjs";
 import { handle as handleGit } from "./routes/git.mjs";
 
+const OUTPUT_BUFFER_MAX_CHARS = 50000;
+
 const apiRouteHandlers = [
   handleFiles, handleConfig, handleSettings, handleProjects,
   handleCalendar, handleCalendarConnections, handlePorts, handleData, handleAgents,
@@ -274,6 +276,18 @@ const httpServer = http.createServer(async (req, res) => {
     return;
   }
 
+  // Slow-request warning: always logs if a request takes > 800ms
+  const _reqStart = Date.now();
+  const _reqPath = req.url;
+  const _reqMethod = req.method;
+  res.on("finish", () => {
+    const ms = Date.now() - _reqStart;
+    if (ms > 800) {
+      console.warn(`[pty-server] SLOW ${_reqMethod} ${_reqPath} — ${ms}ms`);
+    }
+    log("api", `${_reqMethod} ${_reqPath} → ${res.statusCode} (${ms}ms)`);
+  });
+
   // Parse URL for searchParams support
   const url = new URL(req.url, `http://localhost:${PORT}`);
 
@@ -393,16 +407,10 @@ Important:
 
         const agentName = agent;
         const agentDef = getAgentArgs(agentName);
-
-        const session = createSession(agentName, cwd);
-        session.role = "app-start";
-
-        log("pty", `app-start: spawning ${agentName} session=${session.id} cwd=${cwd}`);
-
         const projectName = path.basename(cwd);
 
         // Use the canonical service name from run-config.yaml when present so
-        // the pre-allocation matches the services-path entry (Fix 4).
+        // the pre-allocation matches the services-path entry.
         let primaryServiceName = "app";
         try {
           const rcPath = path.join(cwd, "run-config.yaml");
@@ -415,24 +423,73 @@ Important:
 
         // Pre-allocate a port and inject it so run.sh / the agent can use $PORT
         const allocatedPort = await registryAllocatePort(projectName, cwd, primaryServiceName, "web");
-        session.allocatedPort = allocatedPort;
         log("port", `app-start: pre-allocated port=${allocatedPort} service=${primaryServiceName} project=${projectName}`);
 
-        const ptyProcess = pty.spawn(agentDef.shell, agentDef.args, {
-          name: "xterm-256color",
-          cols: 120,
-          rows: 30,
-          cwd,
-          env: {
-            ...process.env,
-            TERM: "xterm-256color",
-            COLORTERM: "truecolor",
-            OC_PROJECT: projectName,
-            OC_SERVICE: "app",
-            PORT: String(allocatedPort),
-            OC_PORT: String(allocatedPort),
-          },
-        });
+        // ── Auto-discover run.sh from apps/ ─────────────────────────────────
+        // If there is no run.sh at the project root but there is exactly one
+        // app directory inside apps/ that has its own run.sh, copy it to the
+        // root so the fast path can use it (and future runs are instant too).
+        const runShPath = path.join(cwd, "run.sh");
+        if (!fs.existsSync(runShPath)) {
+          const appsDir = path.join(cwd, "apps");
+          if (fs.existsSync(appsDir)) {
+            try {
+              const appDirs = fs.readdirSync(appsDir).filter((e) =>
+                fs.statSync(path.join(appsDir, e)).isDirectory()
+              );
+              if (appDirs.length === 1) {
+                const candidate = path.join(appsDir, appDirs[0], "run.sh");
+                if (fs.existsSync(candidate)) {
+                  fs.copyFileSync(candidate, runShPath);
+                  fs.chmodSync(runShPath, 0o755);
+                  log("pty", `app-start: auto-copied run.sh from apps/${appDirs[0]}/ to project root`);
+                }
+              }
+            } catch (e) {
+              logWarn("pty", `app-start: run.sh auto-discovery failed: ${e.message}`);
+            }
+          }
+        }
+
+        // ── Fast path: run.sh exists → execute directly, skip the agent ─────
+        // This cuts startup from 10-15 s to ~1 s by avoiding agent spin-up,
+        // file-tree reading, and prompt injection round-trip.
+        const useRunSh = fs.existsSync(runShPath);
+
+        const session = createSession(agentName, cwd);
+        session.role = useRunSh ? "run-sh" : "app-start";
+        session.allocatedPort = allocatedPort;
+
+        const sharedEnv = {
+          ...process.env,
+          TERM: "xterm-256color",
+          COLORTERM: "truecolor",
+          OC_PROJECT: projectName,
+          OC_SERVICE: "app",
+          PORT: String(allocatedPort),
+          OC_PORT: String(allocatedPort),
+        };
+
+        let ptyProcess;
+        if (useRunSh) {
+          log("pty", `app-start: fast-path via run.sh session=${session.id} port=${allocatedPort}`);
+          ptyProcess = pty.spawn("bash", [runShPath], {
+            name: "xterm-256color",
+            cols: 120,
+            rows: 30,
+            cwd,
+            env: sharedEnv,
+          });
+        } else {
+          log("pty", `app-start: agent-path spawning ${agentName} session=${session.id} cwd=${cwd}`);
+          ptyProcess = pty.spawn(agentDef.shell, agentDef.args, {
+            name: "xterm-256color",
+            cols: 120,
+            rows: 30,
+            cwd,
+            env: sharedEnv,
+          });
+        }
 
         session.pid = ptyProcess.pid;
         session.status = "running";
@@ -441,48 +498,55 @@ Important:
           ptyProcess,
           clients: new Set(),
           outputBuffer: [],
+          outputBufferSize: 0,
         });
 
-        // Wait for agent ready signal, then inject prompt via bracketed paste
-        const READY_TIMEOUT = 6000;
-        let promptSent = false;
-        const readyPattern = /[$#%>❯➜]\s*$/;
+        // Agent path: wait for shell prompt, then inject the start prompt.
+        // Not needed for the run.sh fast path — bash executes the script immediately.
+        let promptSent = useRunSh; // treat as already-sent for run.sh path
+        let readyTimer = null;
+        if (!useRunSh) {
+          const READY_TIMEOUT = 6000;
+          const readyPattern = /[$#%>❯➜]\s*$/;
 
-        function sendAppStartPrompt() {
-          if (promptSent) return;
-          promptSent = true;
-          if (readyTimer) clearTimeout(readyTimer);
-          // Brief delay to let any startup messages (e.g. installer notices) clear
-          setTimeout(() => {
-            ptyProcess.write(`\x1b[200~${APP_START_PROMPT}\x1b[201~`);
-            // Send Enter separately after a brief pause to ensure submission
+          const sendAppStartPrompt = () => {
+            if (promptSent) return;
+            promptSent = true;
+            if (readyTimer) clearTimeout(readyTimer);
+            // Brief delay to let startup messages (installer notices, etc.) clear
             setTimeout(() => {
-              ptyProcess.write("\r");
-              log("pty", `app-start: sent prompt to session=${session.id}`);
-            }, 150);
-          }, 400);
-        }
+              ptyProcess.write(`\x1b[200~${APP_START_PROMPT}\x1b[201~`);
+              setTimeout(() => {
+                ptyProcess.write("\r");
+                log("pty", `app-start: sent prompt to session=${session.id}`);
+              }, 150);
+            }, 400);
+          };
 
-        const readyTimer = setTimeout(() => {
-          if (!promptSent) {
-            logWarn("pty", `app-start: ready-detection timed out after ${READY_TIMEOUT}ms, sending anyway`);
-            sendAppStartPrompt();
-          }
-        }, READY_TIMEOUT);
+          readyTimer = setTimeout(() => {
+            if (!promptSent) {
+              logWarn("pty", `app-start: ready-detection timed out after ${READY_TIMEOUT}ms, sending anyway`);
+              sendAppStartPrompt();
+            }
+          }, READY_TIMEOUT);
 
-        ptyProcess.onData((data) => {
-          // Detect agent ready before prompt injection (check each line)
-          if (!promptSent) {
-            const clean = stripAnsi(data);
-            const cleanLines = clean.split("\n").filter((l) => l.trim());
-            for (const cl of cleanLines) {
-              if (readyPattern.test(cl.trim())) {
-                log("pty", `app-start: agent ready detected for session=${session.id}`);
-                sendAppStartPrompt();
-                break;
+          // Attach ready-detection listener first (before the shared onData)
+          ptyProcess.onData((data) => {
+            if (!promptSent) {
+              const clean = stripAnsi(data);
+              for (const cl of clean.split("\n").filter((l) => l.trim())) {
+                if (readyPattern.test(cl.trim())) {
+                  log("pty", `app-start: agent ready detected for session=${session.id}`);
+                  sendAppStartPrompt();
+                  break;
+                }
               }
             }
-          }
+          });
+        }
+
+        // Shared data handler: port detection + output buffering (both paths)
+        ptyProcess.onData((data) => {
           session.outputBytes += Buffer.byteLength(data);
           session.outputLines += (data.match(/\n/g) || []).length;
           const clean = stripAnsi(data);
@@ -490,7 +554,11 @@ Important:
           for (const line of lines) {
             session.lastOutput.push(line.trim());
             if (session.lastOutput.length > 30) session.lastOutput.shift();
-            // Detect port from agent/app output
+            // Detect port from app stdout.
+            // Only accept ports in the project range (41000-49999) or the
+            // pre-allocated port. This prevents mentions of Vite's default port
+            // 5173 (from reading a config or framework startup noise) from
+            // poisoning detectedPort.
             if (!session.detectedPort) {
               const portMatch = line.match(
                 /(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::\]):(\d{4,5})|(?:^|[\s:])(?:port|PORT)[:\s]+(\d{4,5})|[Ll]istening\s+on\s+(?:\S+:)?(\d{4,5})|[Ss]erving\s+HTTP\s+on\s+\S+\s+port\s+(\d+)/
@@ -498,10 +566,11 @@ Important:
               const rawPort = portMatch && (portMatch[1] || portMatch[2] || portMatch[3] || portMatch[4]);
               if (rawPort) {
                 const port = parseInt(rawPort, 10);
-                if (port >= 1024 && port <= 65535 && !REGISTRY_RESERVED_PORTS.has(port)) {
+                const inProjectRange = port >= 41000 && port <= 49999;
+                const isAllocated = session.allocatedPort && port === session.allocatedPort;
+                if ((inProjectRange || isAllocated) && !REGISTRY_RESERVED_PORTS.has(port)) {
                   session.detectedPort = port;
-                  log("port", `app-start session=${session.id} detected port: ${port}`);
-                  // Register in port registry (same as services path)
+                  log("port", `app-start session=${session.id} detected port: ${port} (${useRunSh ? "run.sh" : "agent"} path)`);
                   registryAllocatePort(projectName, cwd, "app", "web", port)
                     .then(() => {
                       registryMarkRunning(port, ptyProcess.pid, session.id);
@@ -515,7 +584,10 @@ Important:
           const proc = activeProcesses.get(session.id);
           if (proc) {
             proc.outputBuffer.push(data);
-            if (proc.outputBuffer.length > 200) proc.outputBuffer.shift();
+            proc.outputBufferSize = (proc.outputBufferSize || 0) + data.length;
+            while (proc.outputBufferSize > OUTPUT_BUFFER_MAX_CHARS && proc.outputBuffer.length > 0) {
+              proc.outputBufferSize -= proc.outputBuffer.shift().length;
+            }
             for (const client of proc.clients) {
               if (client.readyState === client.OPEN) {
                 client.send(JSON.stringify({ type: "output", data }));
@@ -535,7 +607,7 @@ Important:
           }
         });
 
-        log("pty", `app-start session spawned: id=${session.id} pid=${ptyProcess.pid}`);
+        log("pty", `app-start session spawned: id=${session.id} pid=${ptyProcess.pid} path=${useRunSh ? "run.sh" : "agent"}`);
         res.end(JSON.stringify({ session }));
       } catch (err) {
         res.writeHead(500);
@@ -660,6 +732,7 @@ Important:
               ptyProcess,
               clients: new Set(),
               outputBuffer: [],
+              outputBufferSize: 0,
             });
 
             const readyPattern = svcDef.ready_pattern
@@ -709,7 +782,10 @@ Important:
               const proc = activeProcesses.get(session.id);
               if (proc) {
                 proc.outputBuffer.push(data);
-                if (proc.outputBuffer.length > 200) proc.outputBuffer.shift();
+                proc.outputBufferSize = (proc.outputBufferSize || 0) + data.length;
+                while (proc.outputBufferSize > OUTPUT_BUFFER_MAX_CHARS && proc.outputBuffer.length > 0) {
+                  proc.outputBufferSize -= proc.outputBuffer.shift().length;
+                }
                 for (const client of proc.clients) {
                   if (client.readyState === client.OPEN) {
                     client.send(JSON.stringify({ type: "output", data }));
@@ -953,6 +1029,7 @@ Important:
           ptyProcess,
           clients: new Set(),
           outputBuffer: [],
+          outputBufferSize: 0,
         });
 
         // Inject prompt once agent CLI is ready (detected from output) or after timeout
@@ -1061,7 +1138,10 @@ Important:
           const proc = activeProcesses.get(session.id);
           if (proc) {
             proc.outputBuffer.push(data);
-            if (proc.outputBuffer.length > 200) proc.outputBuffer.shift();
+            proc.outputBufferSize = (proc.outputBufferSize || 0) + data.length;
+            while (proc.outputBufferSize > OUTPUT_BUFFER_MAX_CHARS && proc.outputBuffer.length > 0) {
+              proc.outputBufferSize -= proc.outputBuffer.shift().length;
+            }
             for (const client of proc.clients) {
               if (client.readyState === 1) {
                 client.send(JSON.stringify({ type: "output", data }));
@@ -1123,6 +1203,75 @@ Important:
       } catch (err) {
         res.writeHead(400);
         res.end(JSON.stringify({ error: "Invalid JSON body" }));
+      }
+    });
+    return;
+  }
+
+  // POST /sessions/:id/kill — terminate a running session
+  const killMatch = req.url?.match(/^\/sessions\/(.+)\/kill$/);
+  if (killMatch && req.method === "POST") {
+    const sessionId = killMatch[1];
+    const session = sessions.get(sessionId);
+    const proc = activeProcesses.get(sessionId);
+    if (!session || !proc?.ptyProcess) {
+      res.writeHead(404);
+      res.end(JSON.stringify({ error: "Session not found or not running" }));
+      return;
+    }
+    try {
+      proc.ptyProcess.kill("SIGTERM");
+      setTimeout(() => {
+        if (session.status === "running") {
+          try { proc.ptyProcess.kill("SIGKILL"); } catch {}
+        }
+      }, 3000);
+      session.status = "completed";
+      session.endedAt = new Date().toISOString();
+      session.paused = false;
+      log("pty", `killed session=${sessionId} via API`);
+      res.end(JSON.stringify({ ok: true }));
+    } catch (err) {
+      res.writeHead(500);
+      res.end(JSON.stringify({ error: String(err) }));
+    }
+    return;
+  }
+
+  // POST /sessions/:id/signal — pause (SIGSTOP) or resume (SIGCONT) a session
+  const signalMatch = req.url?.match(/^\/sessions\/(.+)\/signal$/);
+  if (signalMatch && req.method === "POST") {
+    const sessionId = signalMatch[1];
+    const session = sessions.get(sessionId);
+    const proc = activeProcesses.get(sessionId);
+    if (!session || !proc?.ptyProcess) {
+      res.writeHead(404);
+      res.end(JSON.stringify({ error: "Session not found or not running" }));
+      return;
+    }
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      try {
+        const { signal } = JSON.parse(body);
+        if (signal !== "SIGSTOP" && signal !== "SIGCONT") {
+          res.writeHead(400);
+          res.end(JSON.stringify({ error: "signal must be SIGSTOP or SIGCONT" }));
+          return;
+        }
+        const pid = proc.ptyProcess.pid;
+        if (!pid) {
+          res.writeHead(400);
+          res.end(JSON.stringify({ error: "No PID available" }));
+          return;
+        }
+        process.kill(pid, signal);
+        session.paused = signal === "SIGSTOP";
+        log("pty", `signal ${signal} sent to session=${sessionId} pid=${pid}`);
+        res.end(JSON.stringify({ ok: true, paused: session.paused }));
+      } catch (err) {
+        res.writeHead(500);
+        res.end(JSON.stringify({ error: String(err) }));
       }
     });
     return;
@@ -1257,7 +1406,8 @@ wss.on("connection", (ws) => {
           activeProcesses.set(session.id, {
             ptyProcess,
             clients: new Set([ws]),
-            outputBuffer: [], // Keep last 5000 chars for reconnection
+            outputBuffer: [],
+            outputBufferSize: 0,
           });
 
           log("pty", `spawned PID ${ptyProcess.pid} session=${session.id}`);
@@ -1305,12 +1455,13 @@ wss.on("connection", (ws) => {
 
             const proc = activeProcesses.get(session.id);
             if (proc) {
-              // Buffer output for reconnection (keep last 5000 chars)
+              // Buffer output for reconnection (keep last OUTPUT_BUFFER_MAX_CHARS chars)
               for (const chunk of chunks) {
                 proc.outputBuffer.push(chunk);
+                proc.outputBufferSize = (proc.outputBufferSize || 0) + chunk.length;
               }
-              if (proc.outputBuffer.length > 200) {
-                proc.outputBuffer = proc.outputBuffer.slice(-200);
+              while (proc.outputBufferSize > OUTPUT_BUFFER_MAX_CHARS && proc.outputBuffer.length > 0) {
+                proc.outputBufferSize -= proc.outputBuffer.shift().length;
               }
               // Send combined output to all connected clients as one message
               if (proc.clients.size > 0) {
@@ -1443,15 +1594,15 @@ wss.on("connection", (ws) => {
   });
 });
 
+const _serverStart = Date.now();
 httpServer.listen(PORT, () => {
-  console.log(`[pty-server] listening on http://localhost:${PORT} (HTTP + WebSocket)`);
+  console.log(`[pty-server] listening on http://localhost:${PORT} (HTTP + WebSocket) — startup: ${Date.now() - _serverStart}ms`);
 
   // Cleanup stale port registry entries on startup
+  const _cleanupStart = Date.now();
   try {
     const result = registryCleanup();
-    if (result.removed > 0 || result.marked > 0) {
-      log("port", `registry cleanup: marked=${result.marked} removed=${result.removed}`);
-    }
+    console.log(`[pty-server] registry cleanup done in ${Date.now() - _cleanupStart}ms (marked=${result.marked} removed=${result.removed})`);
   } catch (err) {
     logError("port", `registry cleanup failed:`, err.message);
   }
@@ -1497,6 +1648,7 @@ httpServer.listen(PORT, () => {
       ptyProcess,
       clients: new Set(),
       outputBuffer: [],
+      outputBufferSize: 0,
     });
 
     let promptSent = false;
@@ -1589,8 +1741,9 @@ httpServer.listen(PORT, () => {
       const proc = activeProcesses.get(session.id);
       if (proc) {
         proc.outputBuffer.push(data);
-        if (proc.outputBuffer.length > 200) {
-          proc.outputBuffer = proc.outputBuffer.slice(-200);
+        proc.outputBufferSize = (proc.outputBufferSize || 0) + data.length;
+        while (proc.outputBufferSize > OUTPUT_BUFFER_MAX_CHARS && proc.outputBuffer.length > 0) {
+          proc.outputBufferSize -= proc.outputBuffer.shift().length;
         }
       }
     });

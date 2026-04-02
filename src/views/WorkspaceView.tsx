@@ -8,6 +8,7 @@ import { FileEditModal } from "@/components/FileEditModal";
 const FilePreviewModal = lazy(() => import("@/components/FilePreviewModal").then(m => ({ default: m.FilePreviewModal })));
 import { FolderPickerModal } from "@/components/FolderPickerModal";
 import { GlobalDataPicker } from "@/components/GlobalDataPicker";
+import { ProjectDataPicker } from "@/components/ProjectDataPicker";
 import { ProjectStatusBar } from "@/components/ProjectStatusBar";
 import { useSession } from "@/lib/SessionContext";
 import { useProject } from "@/lib/ProjectContext";
@@ -137,6 +138,7 @@ export default function WorkspaceView() {
   const [showFolderPicker, setShowFolderPicker] = useState(false);
   const [globalPickerOpen, setGlobalPickerOpen] = useState(false);
   const [sharedDataDir, setSharedDataDir] = useState<string | null>(null);
+  const [projectPickerOpen, setProjectPickerOpen] = useState(false);
 
   // Open file preview from URL ?file= param
   useEffect(() => {
@@ -257,6 +259,7 @@ export default function WorkspaceView() {
                   onFilePreview={setPreviewFile}
                   onFileEdit={(path, isNew) => setEditFile({ path, isNew })}
                   onOpenGlobalPicker={sharedDataDir ? () => setGlobalPickerOpen(true) : undefined}
+                  onOpenProjectPicker={workDir ? () => setProjectPickerOpen(true) : undefined}
                   pollInterval={3000}
                 />
               ) : (
@@ -366,6 +369,9 @@ export default function WorkspaceView() {
       {showFolderPicker && <FolderPickerModal onSelect={handleFolderSelect} onClose={() => setShowFolderPicker(false)} />}
       {globalPickerOpen && sharedDataDir && (
         <GlobalDataPicker sharedDataDir={sharedDataDir} onClose={() => setGlobalPickerOpen(false)} />
+      )}
+      {projectPickerOpen && workDir && (
+        <ProjectDataPicker currentProjectPath={workDir} onClose={() => setProjectPickerOpen(false)} />
       )}
     </div>
   );
