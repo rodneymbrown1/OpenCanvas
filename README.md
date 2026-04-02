@@ -5,7 +5,7 @@
 <p align="center"><strong>Build apps from your data using the coding agents you already have.</strong></p>
 
 <p align="center">
-  <code>v1.0-beta</code> &nbsp;·&nbsp; Cost to run: <strong>$0</strong> &nbsp;·&nbsp; Runs locally &nbsp;·&nbsp; Uses your own Claude Code, Codex, or Gemini CLI
+  <code>v1.2.0-beta</code> &nbsp;·&nbsp; Cost to run: <strong>$0</strong> &nbsp;·&nbsp; Runs locally &nbsp;·&nbsp; Uses your own Claude Code, Codex, or Gemini CLI
 </p>
 
 ---
@@ -17,7 +17,7 @@ git clone https://github.com/rodneymbrown1/OpenCanvas.git && cd OpenCanvas
 bash run.sh
 ```
 
-Opens at [localhost:3000](http://localhost:3000). Select a folder, connect your agent, start building.
+Opens at [localhost:40000](http://localhost:40000). Select a folder, connect your agent, start building.
 
 Requires Node.js 18+ and at least one coding agent CLI installed (`claude`, `codex`, or `gemini`).
 
@@ -45,7 +45,7 @@ Calendar agents connect your schedule to your projects. Events on your calendar 
 
 ### Voice Recording
 
-The voice agent lets you talk to Open Canvas instead of typing. It has access to everything that's editable — your projects, workspaces, calendar, and settings. Start a recording session and give instructions by voice: create a new project, edit files, update calendar events, or direct your coding agent. The voice pipeline transcribes your speech, interprets the intent, and dispatches the action. Future versions may extend this to starting and stopping apps directly.
+The voice agent lets you talk to Open Canvas instead of typing. It has access to everything that's editable — your projects, workspaces, calendar, and settings. Start a recording session and give instructions by voice: create a new project, edit files, update calendar events, or direct your coding agent. The voice pipeline transcribes your speech, interprets the intent, and dispatches the action.
 
 ![Recording a Voice Command](assets/demo/02/record-feature-demo.png)
 ![Resulting Project Created by Voice](assets/demo/02/voice-demo.png)
@@ -95,12 +95,41 @@ Open Canvas uses a layered, file-based persistence model instead of a traditiona
 
 ---
 
-## v1.0-beta Release Notes
+## Ports
 
-This release introduces the core feature set for Open Canvas:
+Open Canvas reserves two ports for its own services:
+
+| Port | Service |
+|------|---------|
+| `40000` | Vite dev server (UI) |
+| `40001` | PTY server (HTTP + WebSocket) |
+
+Project apps are launched in the range `41000–49999`, allocated deterministically per project so the same project always gets the same port.
+
+---
+
+## Release History
+
+### v1.2.0-beta — System Hardening & Performance
+
+**Critical: PTY server event loop livelock fix.** Under sustained load from multiple active agent sessions the pty-server accumulated millions of queued callbacks (~1.8GB RAM, 120% CPU), stalling all API calls for 5–15 seconds. Replaced with 16ms per-session output coalescing — HTTP handlers are now guaranteed a response within 16ms regardless of PTY output rate. Measured improvement: API p50 4,872ms → 1ms, worst case 14,545ms → 32ms, CPU 120% → 0%.
+
+**Critical: Wrong project shown in app preview.** Navigating to a different project could load the previous project's live app in the iframe due to a race between async auto-reconnect and URL-based project navigation. Fixed by making URL `?project=` the authoritative source throughout the reconnect flow, and making `handleOpen` synchronous so `setWorkDir` fires before any server calls.
+
+Additional fixes: HTTP readiness probe before showing iframe, adaptive polling intervals, broader shell prompt detection, lazy loading of FullCalendar / xterm / react-markdown (~1.4KB deferred from initial bundle), React hydration safety for `SpeechToTextButton`.
+
+---
+
+### v1.1.0-beta — Persistence Architecture Hardening
+
+All file writes converted to atomic primitives (`tmp.{pid}` → `rename`) via `server/lib/safe-write.mjs`. Read-modify-write cycles across all 15+ write paths serialized with an in-process async mutex. Persistence error logging added to `~/.open-canvas/persistence-errors.log`. Architecture diagram added to README.
+
+---
+
+### v1.0.0-beta — Initial Release
 
 - **Project Workspaces** — full IDE experience with file explorer, terminal, live preview, and multi-agent support
-- **Calendar Agents** — calendar-aware project management that links events to projects and surfaces deadlines to agents
+- **Calendar Agents** — calendar-aware project management linking events to projects and surfacing deadlines to agents
 - **Voice Control** — voice-to-action pipeline with access to projects, workspaces, calendar, and settings
 - **Job Tracking** — real-time view of all active agent sessions, transcriptions, and dispatched prompts
 - **Agent Usage** — per-project, per-agent token and cost tracking
@@ -108,12 +137,8 @@ This release introduces the core feature set for Open Canvas:
 - **Global Shared Data** — upload data once, share across all projects via `skills.md`
 - **Git Integration** — clone, manage repos, and edit files directly from the workspace
 - **MCP Server Support** — connect external services via Model Context Protocol
+- **Google Calendar Integration** — built-in connection pipeline in Settings with auto-sync
 
----
-
-## Coming Soon
-
-- **Open Canvas Launcher** — desktop app to launch Open Canvas without the terminal
 ---
 
 ## License
