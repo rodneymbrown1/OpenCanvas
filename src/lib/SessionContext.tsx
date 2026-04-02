@@ -119,9 +119,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
 
     async function tryAutoReconnect() {
+      // URL is the authoritative source for the active project.
+      // Read it once at the start — never let server config override it.
+      const urlProject = getProjectFromUrl();
+
       let candidateId = session.sessionId;
       let candidateAgent = session.agent;
-      let candidateWorkDir = session.workDir;
+      // If the URL already specifies a project, use it. Otherwise fall back to
+      // the initial session state (which may be empty on first load).
+      let candidateWorkDir = urlProject || session.workDir;
 
       if (candidateId === "pending") candidateId = null;
 
@@ -131,7 +137,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           const config = await res.json();
           candidateId = config.session?.lastSessionId || null;
           candidateAgent = config.session?.lastAgent || config.agent?.active || "claude";
-          candidateWorkDir = config.session?.lastWorkDir || config.workspace?.root || "";
+          // Only use server-stored workDir if the URL didn't specify one.
+          // This prevents the server's stale lastWorkDir from overwriting a
+          // project the user explicitly navigated to.
+          if (!urlProject) {
+            candidateWorkDir = config.session?.lastWorkDir || config.workspace?.root || "";
+          }
         } catch {}
       }
 
@@ -145,16 +156,21 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         if (res.ok) {
           const data = await res.json();
           if (data.session?.status === "running") {
-            if (!cancelled) {
+            // Only reconnect to this session if its cwd matches the active project.
+            // If the URL specifies a project, the session must belong to it.
+            const sessionCwd = data.session?.cwd || candidateWorkDir;
+            if (urlProject && sessionCwd !== urlProject) {
+              logger.session("Auto-reconnect: session cwd mismatch with URL project — skipping", { sessionCwd, urlProject });
+            } else if (!cancelled) {
               setSession({
                 agentConnected: true,
                 sessionId: candidateId,
                 agent: candidateAgent as AgentType,
-                workDir: candidateWorkDir,
+                workDir: urlProject || sessionCwd,
               });
+              setAutoReconnecting(false);
+              return;
             }
-            setAutoReconnecting(false);
-            return;
           }
         }
 
@@ -172,7 +188,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
               agentConnected: true,
               sessionId: running.id,
               agent: running.agent as AgentType,
-              workDir: running.cwd || candidateWorkDir,
+              // Always prefer the URL project over the session's cwd so we
+              // never navigate away from the project the user opened.
+              workDir: urlProject || running.cwd || candidateWorkDir,
             });
             setAutoReconnecting(false);
             return;

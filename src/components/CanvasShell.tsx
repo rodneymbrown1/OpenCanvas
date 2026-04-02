@@ -1,16 +1,12 @@
 
-import { useEffect, Suspense } from "react";
+import { useEffect, Suspense, lazy } from "react";
 import { Sidebar } from "@/components/Sidebar";
-import { TerminalPanel } from "@/components/TerminalPanel";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { ToastContainer } from "@/components/ToastContainer";
 import { useView } from "@/lib/ViewContext";
 import { logger } from "@/lib/logger";
 import { Loader2 } from "lucide-react";
 
-// Static imports — project is ~650K source, no benefit from code-splitting.
-// Dynamic imports with ssr:false caused SSR bailout, white screens, and
-// on-demand Turbopack compilation lag on every tab switch in dev mode.
 import WorkspaceView from "@/views/WorkspaceView";
 import JobsView from "@/views/JobsView";
 import UsageView from "@/views/UsageView";
@@ -18,7 +14,10 @@ import PortsView from "@/views/PortsView";
 import SettingsView from "@/views/SettingsView";
 import DataView from "@/views/DataView";
 import ProjectsView from "@/views/ProjectsView";
-import CalendarView from "@/views/CalendarView";
+
+// Lazy-load heavy views — FullCalendar (~500KB) and xterm (~400KB) only load on demand
+const CalendarView = lazy(() => import("@/views/CalendarView"));
+const TerminalPanel = lazy(() => import("@/components/TerminalPanel").then(m => ({ default: m.TerminalPanel })));
 
 function ViewLoading() {
   return (
@@ -78,7 +77,9 @@ export function CanvasShell() {
             <ActiveView />
           </Suspense>
         </main>
-        <TerminalPanel />
+        <Suspense fallback={null}>
+          <TerminalPanel />
+        </Suspense>
       </div>
       <ToastContainer />
     </>

@@ -21,5 +21,16 @@ export default defineConfig({
   build: {
     outDir: "dist",
     sourcemap: true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          "vendor-react": ["react", "react-dom"],
+          "vendor-xterm": ["@xterm/xterm", "@xterm/addon-fit", "@xterm/addon-web-links"],
+          "vendor-calendar": ["@fullcalendar/react", "@fullcalendar/daygrid", "@fullcalendar/timegrid", "@fullcalendar/interaction"],
+          "vendor-markdown": ["react-markdown", "remark-gfm"],
+          "vendor-lucide": ["lucide-react"],
+        },
+      },
+    },
   },
 });

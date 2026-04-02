@@ -1,9 +1,11 @@
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, lazy, Suspense } from "react";
 import { FileExplorer } from "@/components/FileExplorer";
 import { AgentSelector } from "@/components/AgentSelector";
-import { FilePreviewModal } from "@/components/FilePreviewModal";
 import { FileEditModal } from "@/components/FileEditModal";
+
+// react-markdown is ~530KB — only loaded when user opens a file preview
+const FilePreviewModal = lazy(() => import("@/components/FilePreviewModal").then(m => ({ default: m.FilePreviewModal })));
 import { FolderPickerModal } from "@/components/FolderPickerModal";
 import { GlobalDataPicker } from "@/components/GlobalDataPicker";
 import { ProjectStatusBar } from "@/components/ProjectStatusBar";
@@ -154,7 +156,11 @@ export default function WorkspaceView() {
     fetch("/api/config")
       .then((r) => r.json())
       .then((config) => {
-        if (config.workspace?.root && !workDir) {
+        // Only fall back to server config if NEITHER the URL nor SessionContext
+        // have set a project. This prevents server's stale workspace.root from
+        // overriding a project the user explicitly navigated to.
+        const urlProject = new URLSearchParams(window.location.search).get("project") || "";
+        if (config.workspace?.root && !workDir && !urlProject) {
           setWorkDir(config.workspace.root);
         }
         if (config.agent?.active && agent === "claude") {
@@ -275,13 +281,14 @@ export default function WorkspaceView() {
 
         {/* App preview */}
         <div className="flex-1 min-h-0 overflow-hidden bg-[var(--bg-primary)] flex flex-col">
-          {project.appPort ? (
+          {project.appPort && project.appStatus === "running" ? (
             <>
               {/* App preview toolbar */}
               <div className="flex items-center justify-between px-3 py-1 bg-[var(--bg-secondary)] border-b border-[var(--border)] shrink-0">
                 <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
-                  <span className="w-2 h-2 rounded-full bg-[var(--success)]" />
+                  <span className={`w-2 h-2 rounded-full ${project.appReady ? "bg-[var(--success)]" : "bg-yellow-400 animate-pulse"}`} />
                   <span>localhost:{project.appPort}</span>
+                  {!project.appReady && <span className="text-[10px]">connecting…</span>}
                 </div>
                 <div className="flex items-center gap-1">
                   <button
@@ -309,27 +316,43 @@ export default function WorkspaceView() {
                   </button>
                 </div>
               </div>
-              {/* Iframe */}
-              <iframe
-                key={project.iframeKey}
-                src={`http://localhost:${project.appPort}`}
-                className="flex-1 border-0"
-                title="App Preview"
-              />
+              {/* Iframe with loading overlay */}
+              <div className="relative flex-1 min-h-0">
+                <iframe
+                  key={project.iframeKey}
+                  src={`http://localhost:${project.appPort}`}
+                  className="absolute inset-0 w-full h-full border-0"
+                  title="App Preview"
+                />
+                {/* Loading overlay — shown while readiness probe is running */}
+                {!project.appReady && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[var(--bg-primary)] z-10">
+                    <Loader2 size={24} className="animate-spin text-[var(--accent)]" />
+                    <p className="text-xs text-[var(--text-muted)]">Connecting to app on port {project.appPort}…</p>
+                  </div>
+                )}
+              </div>
             </>
           ) : (
             <div className="flex items-center justify-center h-full">
               <div className="text-center space-y-6 max-w-sm">
                 <img src="/open_canvas_logo.png" alt="Open Canvas" width={200} height={60} className="mx-auto opacity-80" />
-                <p className="text-sm text-[var(--text-muted)]">
-                  Your app preview will appear here.
-                </p>
-                {hasConnectedTerminal ? (
+                {project.appStatus === "building" || project.appStatus === "initializing" ? (
+                  /* App is starting — show inline build state rather than AppControls */
                   <AppControls />
                 ) : (
-                  <p className="text-xs text-[var(--text-muted)]">
-                    Connect an agent to get started.
-                  </p>
+                  <>
+                    <p className="text-sm text-[var(--text-muted)]">
+                      Your app preview will appear here.
+                    </p>
+                    {hasConnectedTerminal ? (
+                      <AppControls />
+                    ) : (
+                      <p className="text-xs text-[var(--text-muted)]">
+                        Connect an agent to get started.
+                      </p>
+                    )}
+                  </>
                 )}
               </div>
             </div>
@@ -338,7 +361,7 @@ export default function WorkspaceView() {
       </div>
 
       {/* Modals */}
-      {previewFile && <FilePreviewModal filePath={previewFile} onClose={() => setPreviewFile(null)} />}
+      {previewFile && <Suspense fallback={null}><FilePreviewModal filePath={previewFile} onClose={() => setPreviewFile(null)} /></Suspense>}
       {editFile && <FileEditModal filePath={editFile.path} isNew={editFile.isNew} onClose={() => setEditFile(null)} />}
       {showFolderPicker && <FolderPickerModal onSelect={handleFolderSelect} onClose={() => setShowFolderPicker(false)} />}
       {globalPickerOpen && sharedDataDir && (

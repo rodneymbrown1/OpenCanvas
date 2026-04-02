@@ -33,8 +33,9 @@ export function Sidebar() {
   return (
     <aside className="w-14 bg-[var(--bg-secondary)] border-r border-[var(--border)] flex flex-col items-center py-4 gap-2">
       {/* Logo → Project Manager */}
-      <button
-        onClick={() => setView("projects")}
+      <a
+        href="/projects"
+        onClick={(e) => { e.preventDefault(); setView("projects"); }}
         className={`w-9 h-9 rounded-lg flex items-center justify-center mb-4 transition-colors ${
           view === "projects"
             ? "bg-[var(--bg-tertiary)] ring-2 ring-[var(--accent)] ring-offset-1 ring-offset-[var(--bg-secondary)]"
@@ -49,15 +50,16 @@ export function Sidebar() {
           height={32}
           className="rounded"
         />
-      </button>
+      </a>
 
       {NAV_ITEMS.map((item) => {
         const isActive = view === item.id;
         const isJobs = item.id === "jobs";
         return (
-          <button
+          <a
             key={item.id}
-            onClick={() => setView(item.id)}
+            href={`/${item.id}`}
+            onClick={(e) => { e.preventDefault(); setView(item.id); }}
             title={isJobs && activeCount > 0 ? `Jobs (${activeCount} active)` : item.label}
             className={`relative w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${
               isActive
@@ -74,7 +76,7 @@ export function Sidebar() {
                 {activeCount > 9 ? "9+" : activeCount}
               </span>
             )}
-          </button>
+          </a>
         );
       })}
 

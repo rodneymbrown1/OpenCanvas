@@ -47,6 +47,7 @@ interface ProjectState {
   // App preview (backward compatible — maps to primary web service)
   appPort: number | null;
   appStatus: AppStatus;
+  appReady: boolean;  // true once HTTP probe confirms the app is responding
   stackSessionId: string | null;
   detectedPorts: PortInfo[];
   startupLog: string[];
@@ -82,6 +83,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     dataFiles: [],
     appPort: null,
     appStatus: "idle",
+    appReady: false,
     stackSessionId: null,
     detectedPorts: [],
     startupLog: [],
@@ -93,10 +95,14 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
 
   const [state, setState] = useState<ProjectState>(initialState);
 
+  // Keep a ref to current state so polling callbacks read fresh values
+  // without stale closure captures and without being in effect deps.
+  const stateRef = useRef<ProjectState>(initialState);
+  useEffect(() => { stateRef.current = state; }, [state]);
+
   // Baseline ports snapshot (taken on mount)
   const baselinePortsRef = useRef<Set<number>>(new Set());
   const baselineTakenRef = useRef(false);
-  // Debounce: port must appear in 2 consecutive polls
   const candidatePortRef = useRef<number | null>(null);
 
   // ── Reset state when project (workDir) changes ─────────────────────────────
@@ -166,10 +172,15 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!session.workDir) return;
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
 
     async function pollStack() {
+      if (cancelled) return;
+      const controller = new AbortController();
       try {
-        const res = await fetch(`/api/stack?cwd=${encodeURIComponent(session.workDir)}`);
+        const res = await fetch(`/api/stack?cwd=${encodeURIComponent(session.workDir)}`, {
+          signal: controller.signal,
+        });
         if (!res.ok || cancelled) return;
         const data = await res.json();
 
@@ -181,22 +192,17 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
               startupLog: s.lastOutput || prev.startupLog,
             };
 
-            // Registry-first: port is known before the app is ready — show
-            // loading iframe immediately instead of waiting for stdout detection.
-            if (s.allocatedPort && !prev.appPort) {
-              updates.appPort = s.allocatedPort;
-              updates.appStatus = "building";
-            }
-
-            // Promote to "running" once stdout confirms the port is live.
-            // Use !== "running" so this fires even when appPort is already set
-            // from the allocatedPort path above.
+            // Only advance appPort when stdout confirms the port is live.
+            // allocatedPort is reserved but not yet listening — showing the
+            // iframe on it produces "Cannot preview app" errors.
             if (s.detectedPort && prev.appStatus !== "running") {
               updates.appPort = s.detectedPort;
               updates.appStatus = "running";
+              // Reset appReady so the readiness probe re-confirms the new port
+              if (s.detectedPort !== prev.appPort) updates.appReady = false;
             }
 
-            if (!s.allocatedPort && !s.detectedPort && !prev.appPort && prev.appStatus !== "building") {
+            if (!s.detectedPort && !prev.appPort && prev.appStatus !== "building") {
               updates.appStatus = "building";
             }
 
@@ -211,15 +217,21 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
           });
         }
       } catch {
-        // ignore
+        // ignore (AbortError or network error)
+      } finally {
+        if (!cancelled) {
+          // Adaptive delay: fast while starting, slow once running
+          const status = stateRef.current.appStatus;
+          const delay = (status === "initializing" || status === "building") ? 1500 : 8000;
+          timer = setTimeout(pollStack, delay);
+        }
       }
     }
 
     pollStack();
-    const interval = setInterval(pollStack, 5000);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      if (timer) clearTimeout(timer);
     };
   }, [session.workDir]);
 
@@ -228,10 +240,15 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!session.workDir) return;
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
 
     async function pollServices() {
+      if (cancelled) return;
+      const controller = new AbortController();
       try {
-        const res = await fetch(`/api/services?cwd=${encodeURIComponent(session.workDir)}`);
+        const res = await fetch(`/api/services?cwd=${encodeURIComponent(session.workDir)}`, {
+          signal: controller.signal,
+        });
         if (!res.ok || cancelled) return;
         const data = await res.json();
 
@@ -259,6 +276,8 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
                 startOrder,
                 appPort: primaryPort,
                 appStatus: "running",
+                // Reset appReady so probe re-confirms the new port
+                appReady: primaryPort === prev.appPort ? prev.appReady : false,
               };
             }
           }
@@ -272,15 +291,26 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
           };
         });
       } catch {
-        // /api/services not available — ignore
+        // /api/services not available or request aborted — ignore
+      } finally {
+        if (!cancelled) {
+          // Fast poll only during active startup; skip entirely if no run-config
+          const { appStatus, runConfigExists } = stateRef.current;
+          if (!runConfigExists && appStatus === "idle") {
+            // No run-config — check infrequently
+            timer = setTimeout(pollServices, 15000);
+          } else {
+            const delay = (appStatus === "initializing" || appStatus === "building") ? 2000 : 8000;
+            timer = setTimeout(pollServices, delay);
+          }
+        }
       }
     }
 
     pollServices();
-    const interval = setInterval(pollServices, 8000);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      if (timer) clearTimeout(timer);
     };
   }, [session.workDir]);
 
@@ -333,17 +363,12 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
           let nextAppPort = prev.appPort;
           let nextAppStatus = prev.appStatus;
 
+          // Single-poll confirmation — no debounce. The lsof scan only returns
+          // listening ports so a port appearing once is reliable enough.
           if (newPorts.length > 0 && !prev.appPort) {
-            const candidate = newPorts[0].port;
-            if (candidatePortRef.current === candidate) {
-              // Port confirmed in 2 consecutive polls — commit it
-              nextAppPort = candidate;
-              nextAppStatus = "running";
-              candidatePortRef.current = null;
-            } else {
-              // First sighting — mark as candidate
-              candidatePortRef.current = candidate;
-            }
+            nextAppPort = newPorts[0].port;
+            nextAppStatus = "running";
+            candidatePortRef.current = null;
           }
 
           // App port disappeared
@@ -353,42 +378,73 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
             candidatePortRef.current = null;
           }
 
-          // Detect building state: agent session running but no app port yet
-          if (
-            session.agentConnected &&
-            !nextAppPort &&
-            nextAppStatus === "idle" &&
-            prev.appStatus !== "building"
-          ) {
-            // Don't auto-set building — let it be set explicitly or stay idle
-          }
-
           return {
             ...prev,
             detectedPorts: ports,
             appPort: nextAppPort,
             appStatus: nextAppStatus,
+            // Reset appReady when port changes so probe re-confirms
+            appReady: nextAppPort !== prev.appPort ? false : prev.appReady,
           };
         });
       } catch {
-        // API not available — ignore
+        // API not available or request aborted — ignore
+      } finally {
+        if (!cancelled) {
+          // Slow down once an app is running — lsof scan is expensive
+          const status = stateRef.current.appStatus;
+          const delay = status === "running" ? 10000 : 3000;
+          timer = setTimeout(pollPorts, delay);
+        }
       }
     }
 
+    let timer: ReturnType<typeof setTimeout> | null = null;
     pollPorts();
-    const interval = setInterval(pollPorts, 10000);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      if (timer) clearTimeout(timer);
     };
   }, [session.agentConnected]);
+
+  // ── HTTP readiness probe ─────────────────────────────────────────────────
+  // After the app port is confirmed in stdout, the HTTP server may need a few
+  // hundred ms to fully bind. Probe with retries; set appReady once it responds.
+
+  useEffect(() => {
+    if (state.appStatus !== "running" || !state.appPort || state.appReady) return;
+    let cancelled = false;
+    const port = state.appPort;
+    let attempt = 0;
+    const MAX_ATTEMPTS = 25; // ~12s total at 500ms intervals
+
+    async function probe() {
+      if (cancelled || attempt >= MAX_ATTEMPTS) return;
+      attempt++;
+      try {
+        const controller = new AbortController();
+        const t = setTimeout(() => controller.abort(), 1500);
+        // mode: no-cors — we just need to know the socket accepted the connection
+        await fetch(`http://localhost:${port}`, { signal: controller.signal, mode: "no-cors" });
+        clearTimeout(t);
+        if (!cancelled) {
+          setState((prev) => prev.appPort === port ? { ...prev, appReady: true } : prev);
+        }
+      } catch {
+        if (!cancelled) setTimeout(probe, 500);
+      }
+    }
+
+    probe();
+    return () => { cancelled = true; };
+  }, [state.appStatus, state.appPort, state.appReady]);
 
   // ── Actions ─────────────────────────────────────────────────────────────
 
   const startApp = useCallback(async () => {
     if (!session.workDir || !session.agent) return;
     logger.project("Starting app", { workDir: session.workDir, agent: session.agent });
-    setState((prev) => ({ ...prev, appStatus: "initializing", startupLog: [] }));
+    setState((prev) => ({ ...prev, appStatus: "initializing", appReady: false, startupLog: [] }));
 
     try {
       // Clean up any existing instance first (kill-and-restart)
@@ -482,6 +538,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       ...prev,
       appPort: null,
       appStatus: "idle",
+      appReady: false,
       stackSessionId: null,
       startupLog: [],
       services: {},
@@ -494,7 +551,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const clearAppPort = useCallback(() => {
-    setState((prev) => ({ ...prev, appPort: null, appStatus: "idle" }));
+    setState((prev) => ({ ...prev, appPort: null, appStatus: "idle", appReady: false }));
     candidatePortRef.current = null;
   }, []);
 
@@ -503,6 +560,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       ...prev,
       appPort: port,
       appStatus: port ? "running" : "idle",
+      appReady: false,
     }));
   }, []);
 

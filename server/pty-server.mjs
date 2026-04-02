@@ -444,23 +444,23 @@ Important:
         });
 
         // Wait for agent ready signal, then inject prompt via bracketed paste
-        const READY_TIMEOUT = 15000;
+        const READY_TIMEOUT = 6000;
         let promptSent = false;
-        const readyPattern = /[>❯]\s*$/;
+        const readyPattern = /[$#%>❯➜]\s*$/;
 
         function sendAppStartPrompt() {
           if (promptSent) return;
           promptSent = true;
           if (readyTimer) clearTimeout(readyTimer);
-          // Delay to let any startup messages (e.g. installer notices) clear
+          // Brief delay to let any startup messages (e.g. installer notices) clear
           setTimeout(() => {
             ptyProcess.write(`\x1b[200~${APP_START_PROMPT}\x1b[201~`);
             // Send Enter separately after a brief pause to ensure submission
             setTimeout(() => {
               ptyProcess.write("\r");
               log("pty", `app-start: sent prompt to session=${session.id}`);
-            }, 200);
-          }, 1500);
+            }, 150);
+          }, 400);
         }
 
         const readyTimer = setTimeout(() => {
@@ -492,9 +492,12 @@ Important:
             if (session.lastOutput.length > 30) session.lastOutput.shift();
             // Detect port from agent/app output
             if (!session.detectedPort) {
-              const portMatch = line.match(/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d{4,5})/);
-              if (portMatch) {
-                const port = parseInt(portMatch[1], 10);
+              const portMatch = line.match(
+                /(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::\]):(\d{4,5})|(?:^|[\s:])(?:port|PORT)[:\s]+(\d{4,5})|[Ll]istening\s+on\s+(?:\S+:)?(\d{4,5})|[Ss]erving\s+HTTP\s+on\s+\S+\s+port\s+(\d+)/
+              );
+              const rawPort = portMatch && (portMatch[1] || portMatch[2] || portMatch[3] || portMatch[4]);
+              if (rawPort) {
+                const port = parseInt(rawPort, 10);
                 if (port >= 1024 && port <= 65535 && !REGISTRY_RESERVED_PORTS.has(port)) {
                   session.detectedPort = port;
                   log("port", `app-start session=${session.id} detected port: ${port}`);
@@ -673,9 +676,12 @@ Important:
                 session.lastOutput.push(line.trim());
                 if (session.lastOutput.length > 30) session.lastOutput.shift();
                 if (!session.detectedPort) {
-                  const portMatch = line.match(/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d{4,5})/);
-                  if (portMatch) {
-                    const port = parseInt(portMatch[1], 10);
+                  const portMatch = line.match(
+                    /(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::\]):(\d{4,5})|(?:^|[\s:])(?:port|PORT)[:\s]+(\d{4,5})|[Ll]istening\s+on\s+(?:\S+:)?(\d{4,5})|[Ss]erving\s+HTTP\s+on\s+\S+\s+port\s+(\d+)/
+                  );
+                  const rawPort2 = portMatch && (portMatch[1] || portMatch[2] || portMatch[3] || portMatch[4]);
+                  if (rawPort2) {
+                    const port = parseInt(rawPort2, 10);
                     if (port >= 3000 && port <= 65535) {
                       session.detectedPort = port;
                       log("port", `service:${name} detected port: ${port}`);
@@ -1259,12 +1265,26 @@ wss.on("connection", (ws) => {
           // Send session info to client
           ws.send(JSON.stringify({ type: "session", session }));
 
-          ptyProcess.onData((data) => {
-            session.outputBytes += Buffer.byteLength(data);
-            session.outputLines += (data.match(/\n/g) || []).length;
+          // Per-session coalesce buffer: accumulate chunks for up to 16ms then
+          // flush as a batch. This keeps the event loop free between flushes so
+          // HTTP handlers are never starved by heavy PTY output. Terminal latency
+          // stays imperceptible (<16ms) while API response times stay <1ms.
+          let coalesceBuffer = [];
+          let coalesceTimer = null;
+
+          const flushCoalesced = () => {
+            coalesceTimer = null;
+            if (coalesceBuffer.length === 0) return;
+            const chunks = coalesceBuffer;
+            coalesceBuffer = [];
+
+            // Combine all chunks for metadata processing
+            const combined = chunks.join("");
+            session.outputBytes += Buffer.byteLength(combined);
+            session.outputLines += (combined.match(/\n/g) || []).length;
 
             // Capture clean text lines for lastOutput and port detection
-            const clean = stripAnsi(data);
+            const clean = stripAnsi(combined);
             const lines = clean.split("\n").filter((l) => l.trim());
             for (const line of lines) {
               session.lastOutput.push(line.trim());
@@ -1272,7 +1292,6 @@ wss.on("connection", (ws) => {
 
               // Detect port from common dev server patterns
               if (!session.detectedPort) {
-                // Matches: localhost:3002, 127.0.0.1:8080, http://localhost:3002
                 const portMatch = line.match(/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d{4,5})/);
                 if (portMatch) {
                   const port = parseInt(portMatch[1], 10);
@@ -1287,21 +1306,39 @@ wss.on("connection", (ws) => {
             const proc = activeProcesses.get(session.id);
             if (proc) {
               // Buffer output for reconnection (keep last 5000 chars)
-              proc.outputBuffer.push(data);
-              if (proc.outputBuffer.length > 200) {
-                proc.outputBuffer.shift();
+              for (const chunk of chunks) {
+                proc.outputBuffer.push(chunk);
               }
-              // Send to all connected clients
-              for (const client of proc.clients) {
-                if (client.readyState === client.OPEN) {
-                  client.send(JSON.stringify({ type: "output", data }));
+              if (proc.outputBuffer.length > 200) {
+                proc.outputBuffer = proc.outputBuffer.slice(-200);
+              }
+              // Send combined output to all connected clients as one message
+              if (proc.clients.size > 0) {
+                const msg = JSON.stringify({ type: "output", data: combined });
+                for (const client of proc.clients) {
+                  if (client.readyState === client.OPEN) {
+                    client.send(msg);
+                  }
                 }
               }
+            }
+          };
+
+          ptyProcess.onData((data) => {
+            coalesceBuffer.push(data);
+            // Arm the flush timer only if not already pending
+            if (!coalesceTimer) {
+              coalesceTimer = setTimeout(flushCoalesced, 16);
             }
           });
 
           ptyProcess.onExit(({ exitCode, signal }) => {
             log("pty", `session=${session.id} exited: code=${exitCode} signal=${signal}`);
+            // Flush any remaining coalesced output before marking session done
+            if (coalesceTimer) {
+              clearTimeout(coalesceTimer);
+              flushCoalesced();
+            }
             session.status = "completed";
             session.exitCode = exitCode;
             session.endedAt = new Date().toISOString();

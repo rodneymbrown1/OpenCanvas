@@ -920,16 +920,21 @@ export default function ProjectsView() {
     fetchState();
   };
 
-  const handleOpen = async (project: ProjectEntry) => {
-    await fetch("/api/projects", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "register", path: project.path, name: project.name }) });
-    await fetch("/api/config", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ workspace: { root: project.path } }) });
+  const handleOpen = (project: ProjectEntry) => {
+    // Navigate synchronously first — URL and React state are the source of truth.
+    // Server calls fire-and-forget so async awaits never race against the workDir
+    // update (previously the two awaits before setWorkDir caused wrong-project bugs).
     setWorkDir(project.path);
     setView("workspace");
+
+    fetch("/api/projects", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "register", path: project.path, name: project.name }) }).catch(() => {});
+    fetch("/api/config", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ workspace: { root: project.path } }) }).catch(() => {});
   };
 
   const handleOpenInNewTab = (project: ProjectEntry) => {
     fetch("/api/projects", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "register", path: project.path, name: project.name }) }).catch(() => {});
-    window.open(`/workspace?project=${encodeURIComponent(project.path)}`, "_blank");
+    // Use root path — the app is always served from /. SessionContext reads ?project= on load.
+    window.open(`/?project=${encodeURIComponent(project.path)}`, "_blank");
   };
 
   // ── Group handlers ──────────────────────────────────────────────────────────

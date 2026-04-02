@@ -7,12 +7,16 @@ const SpeechToElement =
   (SpeechToElementImport as any).default || SpeechToElementImport;
 import { useJobs } from "@/lib/JobsContext";
 
-const isSpeechSupported =
-  typeof window !== "undefined" &&
-  !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
-
 export function SpeechToTextButton() {
   const { spawnVoiceJob, spawning, activeJobs } = useJobs();
+  // Evaluated after mount so SSR and first client render both start as false,
+  // preventing React hydration mismatch from module-level window access.
+  const [isSpeechSupported, setIsSpeechSupported] = useState(false);
+  useEffect(() => {
+    setIsSpeechSupported(
+      !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)
+    );
+  }, []);
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [showPreview, setShowPreview] = useState(false);
