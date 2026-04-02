@@ -19,6 +19,8 @@ bash run.sh
 
 Opens at [localhost:40000](http://localhost:40000). Select a folder, connect your agent, start building.
 
+> **Port usage:** Open Canvas reserves `40000` (UI) and `40001` (PTY server). Project apps are launched in the range `41000–49999`, allocated deterministically per project — the same project always gets the same port. No conflicts with standard dev server ports (3000, 5173, 8080, etc.).
+
 Requires Node.js 18+ and at least one coding agent CLI installed (`claude`, `codex`, or `gemini`).
 
 ---
